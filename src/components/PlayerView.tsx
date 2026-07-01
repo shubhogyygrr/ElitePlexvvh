@@ -5,9 +5,19 @@ import {
   Play, Pause, RotateCcw, Volume2, Maximize, Lock, Unlock, Settings,
   FastForward, VolumeX, Eye, EyeOff, Subtitles, Activity, Sliders, X,
   Star, Clock, Flame, ChevronRight, Film, Tv, Heart, Info, Calendar, Minimize2, HardDrive,
-  Video, Camera, Download, Trash2
+  Video, Camera, Download, Trash2, ArrowLeft,
+  Users, Send, Copy, Check, MessageSquare, Radio, LogOut, Share2
 } from 'lucide-react';
-import { Movie, Episode } from '../types';
+import { Movie, Episode, UserProfile } from '../types';
+import { db } from '../lib/firebase';
+import { 
+  doc, 
+  setDoc, 
+  updateDoc, 
+  onSnapshot, 
+  getDoc, 
+  arrayUnion 
+} from 'firebase/firestore';
 import { safeLocalStorage as localStorage } from '../lib/safeStorage';
 import { useResolvedUrl, savePlaybackProgress, getPlaybackProgress } from '../lib/indexedDBStorage';
 import { playInterfaceTick } from '../lib/soundEffects';
@@ -26,6 +36,7 @@ interface PlayerViewProps {
   startTime?: number;
   isMini?: boolean;
   onMinimizeToggle?: () => void;
+  currentUser?: UserProfile | null;
   key?: string;
 }
 
@@ -42,7 +53,8 @@ export default function PlayerView({
   onPlayMovie,
   startTime = 0,
   isMini = false,
-  onMinimizeToggle
+  onMinimizeToggle,
+  currentUser
 }: PlayerViewProps) {
   const resolvedVideoUrl = useResolvedUrl(videoUrl);
   const isDisplayMediaSupported = typeof navigator !== 'undefined' && 
@@ -261,6 +273,365 @@ export default function PlayerView({
   const [isMuted, setIsMuted] = useState(false);
   const [showGestureOverlay, setShowGestureOverlay] = useState<'volume' | 'brightness' | null>(null);
 
+  // Co-Watching state & synchronization methods
+  const [showCoWatchPanel, setShowCoWatchPanel] = useState(false);
+  const [roomCode, setRoomCode] = useState('');
+  const [isHost, setIsHost] = useState(false);
+  const [coWatchRoomData, setCoWatchRoomData] = useState<any>(null);
+  const [coWatchChat, setCoWatchChat] = useState<any[]>([]);
+  const [coWatchMembers, setCoWatchMembers] = useState<any[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [joinRoomCodeInput, setJoinRoomCodeInput] = useState('');
+  const [coWatchError, setCoWatchError] = useState('');
+  const [copiedCode, setCopiedCode] = useState(false);
+  const isSyncingFromRemote = useRef(false);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [coWatchChat, showCoWatchPanel]);
+
+  // 1. Generate Room Code
+  const generateRoomCode = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 5; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+  };
+
+  // 2. Publish player changes to Firestore
+  const publishPlaybackUpdate = async (newIsPlaying: boolean, newTime: number) => {
+    if (!roomCode || isSyncingFromRemote.current) return;
+    try {
+      const roomRef = doc(db, 'coWatchRooms', roomCode);
+      await updateDoc(roomRef, {
+        isPlaying: newIsPlaying,
+        currentTime: newTime,
+        senderId: currentUser?.id || 'anon',
+        lastUpdated: Date.now()
+      });
+    } catch (err) {
+      console.error("Failed to publish playback update:", err);
+    }
+  };
+
+  const handleSeekedSync = () => {
+    if (videoRef.current && roomCode && !isSyncingFromRemote.current) {
+      publishPlaybackUpdate(isPlaying, videoRef.current.currentTime);
+    }
+  };
+
+  // 3. Create a room
+  const createCoWatchRoom = async () => {
+    if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    setCoWatchError("");
+    try {
+      const code = generateRoomCode();
+      const roomRef = doc(db, 'coWatchRooms', code);
+      const myId = currentUser?.id || 'anon';
+      const myName = currentUser?.name || 'Viewer';
+      const myAvatar = currentUser?.avatarUrl || '';
+
+      const initialRoom = {
+        roomCode: code,
+        movieId: movie.id,
+        episodeId: episode?.id || "",
+        movieTitle: movie.title,
+        episodeTitle: episode?.title || "",
+        isPlaying: isPlaying,
+        currentTime: currentTime,
+        lastUpdated: Date.now(),
+        senderId: myId,
+        members: [{ id: myId, name: myName, avatarUrl: myAvatar, activeAt: Date.now() }],
+        chat: [{
+          id: 'sys-create',
+          senderId: 'system',
+          senderName: 'SYSTEM',
+          senderAvatar: '',
+          text: `Watch party created by ${myName}! Room Code: ${code}`,
+          timestamp: Date.now()
+        }]
+      };
+
+      await setDoc(roomRef, initialRoom);
+      setRoomCode(code);
+      setIsHost(true);
+    } catch (err) {
+      console.error("Error creating room:", err);
+      setCoWatchError("Failed to create room. Please verify your connection.");
+    }
+  };
+
+  // 4. Join a room
+  const joinCoWatchRoom = async (codeToJoin: string) => {
+    if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    const cleanCode = codeToJoin.trim().toUpperCase();
+    if (!cleanCode) {
+      setCoWatchError("Please enter a room code.");
+      return;
+    }
+    setCoWatchError("");
+    try {
+      const roomRef = doc(db, 'coWatchRooms', cleanCode);
+      const roomSnap = await getDoc(roomRef);
+      if (!roomSnap.exists()) {
+        setCoWatchError("Room code not found. Please double-check.");
+        return;
+      }
+
+      const rData = roomSnap.data();
+      const myId = currentUser?.id || 'anon';
+      const myName = currentUser?.name || 'Viewer';
+      const myAvatar = currentUser?.avatarUrl || '';
+
+      const systemMsg = {
+        id: `sys-join-${Math.random()}`,
+        senderId: 'system',
+        senderName: 'SYSTEM',
+        senderAvatar: '',
+        text: `${myName} has joined the watch party!`,
+        timestamp: Date.now()
+      };
+
+      const updatedMembers = [
+        ...(rData.members || []),
+        { id: myId, name: myName, avatarUrl: myAvatar, activeAt: Date.now() }
+      ];
+      const uniqueMembers = updatedMembers.filter((v, i, a) => a.findIndex(t => t.id === v.id) === i);
+
+      await updateDoc(roomRef, {
+        members: uniqueMembers,
+        chat: arrayUnion(systemMsg)
+      });
+
+      setRoomCode(cleanCode);
+      setIsHost(false);
+
+      if (rData.movieId && rData.movieId !== movie.id) {
+        const targetMovie = movies.find(m => m.id === rData.movieId);
+        if (targetMovie) {
+          let targetEpisode = undefined;
+          if (rData.episodeId && targetMovie.seasons) {
+            for (const season of targetMovie.seasons) {
+              const ep = season.episodes.find(e => e.id === rData.episodeId);
+              if (ep) {
+                targetEpisode = ep;
+                break;
+              }
+            }
+          }
+          onPlayMovie(targetMovie, targetEpisode, rData.currentTime);
+        }
+      } else {
+        setIsPlaying(rData.isPlaying);
+        if (videoRef.current) {
+          videoRef.current.currentTime = rData.currentTime;
+          setCurrentTime(rData.currentTime);
+        }
+      }
+    } catch (err) {
+      console.error("Error joining room:", err);
+      setCoWatchError("Failed to join room. Please check your internet connection.");
+    }
+  };
+
+  // 5. Leave a room
+  const leaveRoom = async (code: string) => {
+    if (!code) return;
+    try {
+      const roomRef = doc(db, 'coWatchRooms', code);
+      const roomSnap = await getDoc(roomRef);
+      if (roomSnap.exists()) {
+        const rData = roomSnap.data();
+        const curMembers = rData.members || [];
+        const myId = currentUser?.id || 'anon';
+        const myName = currentUser?.name || 'Viewer';
+        const updatedMembers = curMembers.filter((m: any) => m.id !== myId);
+        
+        const systemMsg = {
+          id: `sys-leave-${Math.random()}`,
+          senderId: 'system',
+          senderName: 'SYSTEM',
+          senderAvatar: '',
+          text: `${myName} has left the watch party.`,
+          timestamp: Date.now()
+        };
+
+        if (updatedMembers.length === 0) {
+          await updateDoc(roomRef, { members: [] });
+        } else {
+          await updateDoc(roomRef, { 
+            members: updatedMembers,
+            chat: arrayUnion(systemMsg)
+          });
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to gracefully leave room:", err);
+    }
+  };
+
+  // 6. Send Chat Message
+  const sendChatMessage = async (text: string) => {
+    if (!text.trim() || !roomCode) return;
+    try {
+      const roomRef = doc(db, 'coWatchRooms', roomCode);
+      const myId = currentUser?.id || 'anon';
+      const myName = currentUser?.name || 'Viewer';
+      const myAvatar = currentUser?.avatarUrl || '';
+      
+      const newMessage = {
+        id: Math.random().toString(),
+        senderId: myId,
+        senderName: myName,
+        senderAvatar: myAvatar,
+        text: text.trim(),
+        timestamp: Date.now()
+      };
+
+      await updateDoc(roomRef, {
+        chat: arrayUnion(newMessage)
+      });
+      setChatInput("");
+      if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    } catch (err) {
+      console.error("Failed to send chat message:", err);
+      setCoWatchError("Could not send message.");
+    }
+  };
+
+  // Effect to subscribe to room updates
+  useEffect(() => {
+    if (!roomCode) {
+      setCoWatchRoomData(null);
+      setCoWatchChat([]);
+      setCoWatchMembers([]);
+      return;
+    }
+
+    const roomRef = doc(db, 'coWatchRooms', roomCode);
+
+    const unsubscribe = onSnapshot(roomRef, (snapshot) => {
+      if (!snapshot.exists()) {
+        setCoWatchError("Room does not exist or has been closed.");
+        setRoomCode("");
+        return;
+      }
+
+      const data = snapshot.data();
+      setCoWatchRoomData(data);
+      if (data.chat) setCoWatchChat(data.chat);
+      if (data.members) setCoWatchMembers(data.members);
+
+      const myId = currentUser?.id || 'anon';
+      if (data.senderId !== myId) {
+        isSyncingFromRemote.current = true;
+
+        if (data.movieId && data.movieId !== movie.id) {
+          const targetMovie = movies.find(m => m.id === data.movieId);
+          if (targetMovie) {
+            let targetEpisode = undefined;
+            if (data.episodeId && targetMovie.seasons) {
+              for (const season of targetMovie.seasons) {
+                const ep = season.episodes.find(e => e.id === data.episodeId);
+                if (ep) {
+                  targetEpisode = ep;
+                  break;
+                }
+              }
+            }
+            onPlayMovie(targetMovie, targetEpisode, data.currentTime);
+          }
+        } else {
+          if (data.isPlaying !== isPlaying) {
+            setIsPlaying(data.isPlaying);
+          }
+          if (videoRef.current && Math.abs(data.currentTime - videoRef.current.currentTime) > 3) {
+            videoRef.current.currentTime = data.currentTime;
+            setCurrentTime(data.currentTime);
+          }
+        }
+
+        setTimeout(() => {
+          isSyncingFromRemote.current = false;
+        }, 800);
+      }
+    }, (error) => {
+      console.error("Error watching room:", error);
+      setCoWatchError("Failed to synchronize with room.");
+    });
+
+    const myId = currentUser?.id || 'anon';
+    const presenceInterval = setInterval(async () => {
+      try {
+        const roomSnap = await getDoc(roomRef);
+        if (roomSnap.exists()) {
+          const rData = roomSnap.data();
+          const curMembers = rData.members || [];
+          const updated = curMembers.map((m: any) => {
+            if (m.id === myId) {
+              return { ...m, activeAt: Date.now() };
+            }
+            return m;
+          });
+          const activeOnly = updated.filter((m: any) => Date.now() - m.activeAt < 30000);
+          await updateDoc(roomRef, { members: activeOnly });
+        }
+      } catch (err) {
+        console.warn("Presence heartbeat failed:", err);
+      }
+    }, 15000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(presenceInterval);
+      leaveRoom(roomCode);
+    };
+  }, [roomCode]);
+
+  // Effect to sync local play/pause changes
+  useEffect(() => {
+    if (roomCode && !isSyncingFromRemote.current) {
+      const currentVideoTime = videoRef.current ? videoRef.current.currentTime : currentTime;
+      publishPlaybackUpdate(isPlaying, currentVideoTime);
+    }
+  }, [isPlaying]);
+
+  // Effect to sync media change if Host changes movie/episode
+  useEffect(() => {
+    if (roomCode && isHost && !isSyncingFromRemote.current) {
+      const roomRef = doc(db, 'coWatchRooms', roomCode);
+      const myId = currentUser?.id || 'anon';
+      const myName = currentUser?.name || 'Viewer';
+      
+      const transitionMsg = {
+        id: `sys-transition-${Math.random()}`,
+        senderId: 'system',
+        senderName: 'SYSTEM',
+        senderAvatar: '',
+        text: `Host transitioned to ${movie.title} ${episode ? `- ${episode.title}` : ''}`,
+        timestamp: Date.now()
+      };
+
+      updateDoc(roomRef, {
+        movieId: movie.id,
+        episodeId: episode?.id || "",
+        movieTitle: movie.title,
+        episodeTitle: episode?.title || "",
+        isPlaying: true,
+        currentTime: 0,
+        senderId: myId,
+        lastUpdated: Date.now(),
+        chat: arrayUnion(transitionMsg)
+      }).catch(err => console.error("Failed to update movie transition in room:", err));
+    }
+  }, [movie.id, episode?.id]);
+
   // Listen for global custom events from the main app key listener (OTT shortcuts)
   useEffect(() => {
     const handleTogglePlay = () => {
@@ -342,6 +713,20 @@ export default function PlayerView({
 
     // Save progress to Resume Watching
     if (movie && curr > 3 && dur > 10) {
+      if (isSeries && episode) {
+        try {
+          const lastWatchedStr = localStorage.getItem('ep_series_last_watched') || '{}';
+          const lastWatchedMap = JSON.parse(lastWatchedStr);
+          lastWatchedMap[movie.id] = {
+            episodeId: episode.id,
+            updatedAt: Date.now()
+          };
+          localStorage.setItem('ep_series_last_watched', JSON.stringify(lastWatchedMap));
+        } catch (e) {
+          console.error("Failed to save series progress in player:", e);
+        }
+      }
+
       const progressPercent = Math.min(100, Math.floor((curr / dur) * 100));
       if (progressPercent < 95) {
         try {
@@ -557,6 +942,7 @@ export default function PlayerView({
                 handleTimeUpdate();
                 handleLoadedMetadata();
               }}
+              onSeeked={handleSeekedSync}
               onError={() => {
                 setPlaybackError(true);
               }}
@@ -589,9 +975,9 @@ export default function PlayerView({
                   onClose();
                 }}
                 className="w-6 h-6 rounded-full bg-black/60 flex items-center justify-center text-white hover:bg-black/85"
-                title="Close Player"
+                title="Back"
               >
-                <X className="w-3.5 h-3.5" />
+                <ArrowLeft className="w-3.5 h-3.5 text-gold-base" />
               </button>
               <span className="text-[8px] font-serif font-black text-white uppercase tracking-wider truncate max-w-[120px]">
                 {movie?.title || title}
@@ -677,7 +1063,10 @@ export default function PlayerView({
               setPlaybackError(false);
             }}
             onCanPlay={() => setIsVideoLoading(false)}
-            onSeeked={() => setIsVideoLoading(false)}
+            onSeeked={() => {
+              setIsVideoLoading(false);
+              handleSeekedSync();
+            }}
             onError={() => {
               setPlaybackError(true);
               setIsVideoLoading(false);
@@ -776,9 +1165,9 @@ export default function PlayerView({
                   <button
                     onClick={onClose}
                     className="w-8 h-8 rounded-full bg-black/60 border border-white/10 flex items-center justify-center text-white hover:bg-black/85 cursor-pointer active:scale-95 transition-all"
-                    title="Close Player"
+                    title="Back"
                   >
-                    <X className="w-4 h-4" />
+                    <ArrowLeft className="w-4 h-4 text-gold-base" />
                   </button>
                   {onMinimizeToggle && (
                     <button
@@ -800,11 +1189,37 @@ export default function PlayerView({
                   <h4 className="text-[11px] text-white font-serif truncate max-w-[180px] font-medium">{title}</h4>
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* Clip / Reaction Recorder Trigger */}
+                  {/* Co-Watching / Watch Party Toggle Button */}
                   <button
                     onClick={() => {
                       if (typeof playInterfaceTick === 'function') playInterfaceTick();
+                      setShowCoWatchPanel(!showCoWatchPanel);
+                    }}
+                    className={`w-8 h-8 rounded-full bg-black/60 border flex items-center justify-center text-white hover:bg-black/85 cursor-pointer active:scale-95 transition-all relative ${
+                      roomCode ? 'border-gold-base bg-gold-950/20 shadow-[0_0_12px_rgba(212,175,55,0.4)]' : 'border-white/10'
+                    }`}
+                    title="Co-Watching / Sync Watch Party"
+                  >
+                    <Users className={`w-4 h-4 ${roomCode ? 'text-gold-base animate-pulse' : 'text-gold-base'}`} />
+                    {roomCode && (
+                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-black animate-pulse" />
+                    )}
+                  </button>
+
+                  {/* Clip / Reaction Recorder Trigger */}
+                  <motion.button
+                    onClick={() => {
+                      if (typeof playInterfaceTick === 'function') playInterfaceTick();
                       setShowRecorder(!showRecorder);
+                    }}
+                    animate={{
+                      y: [0, -3, 0],
+                      scale: [1, 1.05, 1],
+                    }}
+                    transition={{
+                      duration: 2.5,
+                      repeat: Infinity,
+                      ease: "easeInOut"
                     }}
                     className={`w-8 h-8 rounded-full bg-black/60 border flex items-center justify-center text-white hover:bg-black/85 cursor-pointer active:scale-95 transition-all ${
                       showRecorder ? 'border-red-500 bg-red-950/20 shadow-[0_0_12px_rgba(239,68,68,0.4)]' : 'border-white/10'
@@ -812,7 +1227,7 @@ export default function PlayerView({
                     title="Record Clip / Reaction"
                   >
                     <Video className={`w-4 h-4 ${showRecorder ? 'text-red-500 animate-pulse' : 'text-gold-base'}`} />
-                  </button>
+                  </motion.button>
 
                   <button
                     onClick={() => setShowSettings(!showSettings)}
@@ -883,6 +1298,247 @@ export default function PlayerView({
                   </div>
                 </div>
               )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Co-Watching Watch Party Sidebar Panel */}
+        <AnimatePresence>
+          {showCoWatchPanel && (
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="absolute right-0 top-0 bottom-0 w-80 md:w-96 bg-black/95 border-l border-white/10 z-[100] flex flex-col text-white pointer-events-auto backdrop-blur-md shadow-2xl font-sans"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="p-4 border-b border-white/10 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Radio className="w-4 h-4 text-gold-base animate-pulse" />
+                  <span className="text-[11px] font-tech tracking-[0.2em] text-gold-base uppercase font-bold">
+                    CO-WATCH THEATRE
+                  </span>
+                </div>
+                <button
+                  onClick={() => setShowCoWatchPanel(false)}
+                  className="w-7 h-7 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Error Banner */}
+              {coWatchError && (
+                <div className="m-3 p-2.5 rounded bg-red-950/40 border border-red-500/30 text-xs text-red-300 flex items-start justify-between">
+                  <span>{coWatchError}</span>
+                  <button onClick={() => setCoWatchError("")}>
+                    <X className="w-3 h-3 hover:text-white" />
+                  </button>
+                </div>
+              )}
+
+              {/* Main Content Area */}
+              <div className="flex-1 overflow-y-auto p-4 flex flex-col scrollbar-thin">
+                {!roomCode ? (
+                  // Room Joining / Creation Screen
+                  <div className="flex-1 flex flex-col justify-center py-6">
+                    <div className="text-center mb-6">
+                      <div className="w-12 h-12 rounded-full bg-gold-base/10 border border-gold-base/20 flex items-center justify-center mx-auto mb-3">
+                        <Users className="w-6 h-6 text-gold-base" />
+                      </div>
+                      <h3 className="text-sm font-semibold text-white uppercase tracking-wider">Sync Playback Party</h3>
+                      <p className="text-xs text-white/50 mt-1 max-w-[260px] mx-auto">
+                        Stream movies or series in perfect synchronization with your friends in real-time.
+                      </p>
+                    </div>
+
+                    {/* Create Room Button */}
+                    <button
+                      onClick={createCoWatchRoom}
+                      className="w-full py-3 px-4 rounded-xl gold-gradient-bg text-black font-semibold text-xs uppercase tracking-wider shadow-lg shadow-gold-base/15 hover:opacity-90 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer font-serif animate-pulse"
+                    >
+                      <Radio className="w-4 h-4" />
+                      Host New Watch Party
+                    </button>
+
+                    <div className="flex items-center my-6">
+                      <div className="flex-1 border-t border-white/10"></div>
+                      <span className="px-3 text-[10px] font-mono text-white/30 uppercase tracking-widest">OR</span>
+                      <div className="flex-1 border-t border-white/10"></div>
+                    </div>
+
+                    {/* Join Room Form */}
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-tech text-white/40 tracking-wider uppercase block">
+                        Enter Secret Party Code
+                      </label>
+                      <input
+                        type="text"
+                        value={joinRoomCodeInput}
+                        onChange={(e) => setJoinRoomCodeInput(e.target.value.toUpperCase().slice(0, 5))}
+                        placeholder="ABCDE"
+                        maxLength={5}
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-center text-lg font-mono tracking-[0.4em] font-semibold text-gold-base uppercase placeholder-white/20 focus:outline-none focus:border-gold-base/40 transition-all"
+                      />
+                      <button
+                        onClick={() => joinCoWatchRoom(joinRoomCodeInput)}
+                        className="w-full py-3 px-4 rounded-xl bg-white/5 border border-white/10 text-white font-medium text-xs uppercase tracking-wider hover:bg-white/10 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        Join Friends Lobby
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  // Room Lobby and Chat Screen
+                  <div className="flex-1 flex flex-col h-full gap-4">
+                    {/* Room Secret Details Card */}
+                    <div className="bg-white/5 border border-white/10 p-4 rounded-xl space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-mono text-white/40 uppercase tracking-wider">Party Code</span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[8px] font-mono text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 bg-emerald-950/10 rounded uppercase animate-pulse">
+                            ● Connected
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center justify-between">
+                        <span className="text-xl font-mono tracking-[0.3em] font-bold text-gold-base">
+                          {roomCode}
+                        </span>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(roomCode);
+                            setCopiedCode(true);
+                            setTimeout(() => setCopiedCode(false), 2000);
+                          }}
+                          className="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 text-white/85 cursor-pointer"
+                          title="Copy Code"
+                        >
+                          {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-gold-base" />}
+                        </button>
+                      </div>
+
+                      <div className="text-[10px] text-white/50 border-t border-white/5 pt-2.5 flex items-center justify-between">
+                        <span>{isHost ? '👑 Party Host' : '👥 Party Member'}</span>
+                        <button
+                          onClick={async () => {
+                            if (typeof playInterfaceTick === 'function') playInterfaceTick();
+                            await leaveRoom(roomCode);
+                            setRoomCode("");
+                          }}
+                          className="text-red-400 hover:text-red-300 flex items-center gap-1 active:scale-95 transition-all cursor-pointer bg-transparent border-0"
+                        >
+                          <LogOut className="w-3 h-3" />
+                          Leave Room
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Active Members Section */}
+                    <div>
+                      <h4 className="text-[10px] font-tech text-white/40 tracking-wider uppercase mb-2 flex items-center justify-between">
+                        <span>Members Online</span>
+                        <span>{coWatchMembers.length}</span>
+                      </h4>
+                      <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">
+                        {coWatchMembers.map((m: any, idx: number) => {
+                          const isMemberHost = coWatchRoomData?.senderId === m.id || idx === 0;
+                          return (
+                            <div
+                              key={m.id || idx}
+                              className="flex items-center gap-1.5 px-2.5 py-1 bg-white/5 border border-white/10 rounded-full text-xs"
+                            >
+                              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                              <span className="max-w-[100px] truncate">{m.name || 'Viewer'}</span>
+                              {isMemberHost && (
+                                <span className="text-[9px] text-gold-base" title="Room Host">👑</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Chat Messages Section */}
+                    <div className="flex-1 flex flex-col min-h-0">
+                      <h4 className="text-[10px] font-tech text-white/40 tracking-wider uppercase mb-2">
+                        Theatre Chat
+                      </h4>
+                      <div className="flex-1 bg-black/40 border border-white/5 rounded-xl p-3 overflow-y-auto space-y-3 min-h-0 flex flex-col scrollbar-thin">
+                        {coWatchChat.length === 0 ? (
+                          <div className="flex-1 flex items-center justify-center text-center p-4">
+                            <p className="text-xs text-white/30 font-mono">
+                              No messages yet. Send a greetings message to start!
+                            </p>
+                          </div>
+                        ) : (
+                          coWatchChat.map((msg: any) => {
+                            if (msg.senderId === 'system') {
+                              return (
+                                <div key={msg.id} className="text-center py-1">
+                                  <span className="text-[9px] font-mono text-gold-base/70 bg-gold-base/5 border border-gold-base/10 px-2 py-0.5 rounded-full inline-block">
+                                    {msg.text}
+                                  </span>
+                                </div>
+                              );
+                            }
+
+                            const isMe = msg.senderId === (currentUser?.id || 'anon');
+                            return (
+                              <div
+                                key={msg.id}
+                                className={`flex flex-col max-w-[80%] ${
+                                  isMe ? 'self-end items-end' : 'self-start items-start'
+                                }`}
+                              >
+                                <span className="text-[9px] font-mono text-white/40 mb-0.5 px-1">
+                                  {msg.senderName}
+                                </span>
+                                <div
+                                  className={`rounded-2xl px-3 py-1.5 text-xs ${
+                                    isMe
+                                      ? 'bg-gold-base text-black rounded-tr-none'
+                                      : 'bg-white/10 text-white rounded-tl-none'
+                                  }`}
+                                >
+                                  {msg.text}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                        <div ref={chatEndRef} />
+                      </div>
+                    </div>
+
+                    {/* Chat Input Send Bar */}
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        sendChatMessage(chatInput);
+                      }}
+                      className="flex gap-2"
+                    >
+                      <input
+                        type="text"
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        placeholder="Say something..."
+                        className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-gold-base/40 transition-all text-white placeholder-white/30"
+                      />
+                      <button
+                        type="submit"
+                        className="w-8 h-8 rounded-xl gold-gradient-bg flex items-center justify-center text-black hover:opacity-90 active:scale-95 transition-all cursor-pointer border-0"
+                      >
+                        <Send className="w-3.5 h-3.5 fill-black" />
+                      </button>
+                    </form>
+                  </div>
+                )}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

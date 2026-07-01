@@ -66,6 +66,28 @@ export default function HomeView({
   const [selectedGenre, setSelectedGenre] = useState('All');
   const [scrolled, setScrolled] = useState(false);
 
+  // Premium Custom App Banner States and Synchronization Listener
+  const [showAppBanner, setShowAppBanner] = useState(() => {
+    return localStorage.getItem('ep_show_app_banner') === 'true';
+  });
+  const [selectedBannerIndex, setSelectedBannerIndex] = useState(() => {
+    const saved = localStorage.getItem('ep_selected_banner_index');
+    return saved ? parseInt(saved, 10) : 0;
+  });
+
+  useEffect(() => {
+    const handleBannerSettingsUpdate = () => {
+      setShowAppBanner(localStorage.getItem('ep_show_app_banner') === 'true');
+      const savedIndex = localStorage.getItem('ep_selected_banner_index');
+      setSelectedBannerIndex(savedIndex ? parseInt(savedIndex, 10) : 0);
+    };
+
+    window.addEventListener('ep-banner-settings-updated', handleBannerSettingsUpdate);
+    return () => {
+      window.removeEventListener('ep-banner-settings-updated', handleBannerSettingsUpdate);
+    };
+  }, []);
+
   const activeCategories = Array.from(new Set([
     'All',
     ...(movieCategories || []).filter(c => c && c.toLowerCase() !== 'all').map(c => c.trim()),
@@ -78,6 +100,30 @@ export default function HomeView({
   const [loadingRecommendations, setLoadingRecommendations] = useState<boolean>(false);
   const [isFallbackMode, setIsFallbackMode] = useState<boolean>(false);
 
+  const [lastWatchedMap, setLastWatchedMap] = useState<Record<string, { episodeId: string, updatedAt: number }>>({});
+
+  useEffect(() => {
+    const loadLastWatched = () => {
+      try {
+        const saved = localStorage.getItem('ep_series_last_watched');
+        if (saved) {
+          setLastWatchedMap(JSON.parse(saved));
+        } else {
+          setLastWatchedMap({});
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
+    loadLastWatched();
+
+    window.addEventListener('ep-series-last-watched-updated', loadLastWatched);
+    return () => {
+      window.removeEventListener('ep-series-last-watched-updated', loadLastWatched);
+    };
+  }, []);
+
   // Strict defensive de-duplication of movies array by ID
   const uniqueMovies = useMemo(() => {
     const seen = new Set();
@@ -88,6 +134,201 @@ export default function HomeView({
       return true;
     });
   }, [movies]);
+
+  const watchNextQueue = useMemo(() => {
+    const seriesList = uniqueMovies.filter(m => m.type === 'series');
+    const queueItems: Array<{
+      series: Movie;
+      lastWatchedEpisodeId?: string;
+      upcomingEpisode: Episode;
+      remainingCount: number;
+    }> = [];
+
+    seriesList.forEach(series => {
+      let lastEpId: string | undefined = undefined;
+
+      if (lastWatchedMap && lastWatchedMap[series.id]) {
+        lastEpId = lastWatchedMap[series.id].episodeId;
+      }
+
+      const resumeItem = resumeList.find(item => item.movieId === series.id);
+      if (resumeItem && resumeItem.episodeId) {
+        lastEpId = resumeItem.episodeId;
+      }
+
+      if (!series.seasons || series.seasons.length === 0) return;
+      const sortedSeasons = [...series.seasons].sort((a, b) => a.seasonNumber - b.seasonNumber);
+      const allEps: Episode[] = [];
+      sortedSeasons.forEach(season => {
+        if (season.episodes) {
+          const sortedEps = [...season.episodes].sort((a, b) => a.episodeNumber - b.episodeNumber);
+          allEps.push(...sortedEps);
+        }
+      });
+
+      if (allEps.length === 0) return;
+
+      let upcomingEp: Episode | undefined = undefined;
+      let remainingCount = 0;
+
+      if (!lastEpId) {
+        const isCurrentlyWatching = resumeItem || watchHistory.some(h => h.id === series.id);
+        if (isCurrentlyWatching) {
+          upcomingEp = allEps[0];
+          remainingCount = allEps.length;
+        }
+      } else {
+        const currIdx = allEps.findIndex(ep => ep.id === lastEpId);
+        if (currIdx !== -1) {
+          if (currIdx + 1 < allEps.length) {
+            upcomingEp = allEps[currIdx + 1];
+            remainingCount = allEps.length - (currIdx + 1);
+          }
+        } else {
+          upcomingEp = allEps[0];
+          remainingCount = allEps.length;
+        }
+      }
+
+      if (upcomingEp) {
+        queueItems.push({
+          series,
+          lastWatchedEpisodeId: lastEpId,
+          upcomingEpisode: upcomingEp,
+          remainingCount
+        });
+      }
+    });
+
+    return queueItems.sort((a, b) => {
+      const timeA = Math.max(
+        lastWatchedMap[a.series.id]?.updatedAt || 0,
+        resumeList.find(item => item.movieId === a.series.id)?.updatedAt || 0
+      );
+      const timeB = Math.max(
+        lastWatchedMap[b.series.id]?.updatedAt || 0,
+        resumeList.find(item => item.movieId === b.series.id)?.updatedAt || 0
+      );
+      return timeB - timeA;
+    });
+  }, [uniqueMovies, resumeList, lastWatchedMap, watchHistory]);
+
+  const suggestedQueue = useMemo(() => {
+    if (watchNextQueue.length > 0) return [];
+    const seriesList = uniqueMovies.filter(m => m.type === 'series').slice(0, 4);
+    return seriesList.map(series => {
+      if (!series.seasons || series.seasons.length === 0) return null;
+      const firstSeason = [...series.seasons].sort((a, b) => a.seasonNumber - b.seasonNumber)[0];
+      if (!firstSeason || !firstSeason.episodes || firstSeason.episodes.length === 0) return null;
+      const firstEp = [...firstSeason.episodes].sort((a, b) => a.episodeNumber - b.episodeNumber)[0];
+      const totalEps = series.seasons.reduce((sum, s) => sum + (s.episodes?.length || 0), 0);
+
+      return {
+        series,
+        upcomingEpisode: firstEp,
+        remainingCount: totalEps,
+        isSuggestion: true
+      };
+    }).filter(Boolean) as Array<{
+      series: Movie;
+      upcomingEpisode: Episode;
+      remainingCount: number;
+      isSuggestion: boolean;
+    }>;
+  }, [uniqueMovies, watchNextQueue]);
+
+  const handlePlayUpcomingEpisode = (series: Movie, episode: Episode) => {
+    if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    if (onPlayMovie) {
+      onPlayMovie(series, episode, 0);
+    } else {
+      onSelectMovie(series);
+    }
+  };
+
+  // Extract top watched genres from history for metadata subtitle
+  const topWatchedGenres = useMemo(() => {
+    const counts: Record<string, number> = {};
+    (watchHistory || []).forEach(m => {
+      if (m && Array.isArray(m.genres)) {
+        m.genres.forEach(g => {
+          if (g) {
+            const cleanG = g.trim();
+            counts[cleanG] = (counts[cleanG] || 0) + 1;
+          }
+        });
+      }
+    });
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([genre]) => genre)
+      .slice(0, 3);
+  }, [watchHistory]);
+
+  // Hybrid computed recommendations (AI curations + Local Genre-based filter)
+  const computedRecommendations = useMemo(() => {
+    // 1. Get watched genres
+    const watchedGenres = new Set<string>();
+    (watchHistory || []).forEach(m => {
+      if (m && Array.isArray(m.genres)) {
+        m.genres.forEach(g => {
+          if (g) watchedGenres.add(g.toLowerCase().trim());
+        });
+      }
+    });
+
+    const watchedMovieIds = new Set((watchHistory || []).map(m => m.id));
+
+    // 2. Filter our catalog based on these genres
+    let genreMatches: Movie[] = [];
+    if (watchedGenres.size > 0) {
+      genreMatches = uniqueMovies.filter(m => {
+        if (!m || watchedMovieIds.has(m.id)) return false;
+        if (!m.genres || !Array.isArray(m.genres)) return false;
+        return m.genres.some(g => g && watchedGenres.has(g.toLowerCase().trim()));
+      });
+
+      // Sort by rating desc
+      genreMatches.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+    }
+
+    // 3. De-duplicate and merge with current server-side recommendations
+    const mergedList: Movie[] = [];
+    const seenIds = new Set<string>();
+
+    // First add AI recommendations
+    (recommendations || []).forEach(m => {
+      if (m && m.id && !seenIds.has(m.id)) {
+        mergedList.push(m);
+        seenIds.add(m.id);
+      }
+    });
+
+    // Then add genre matches
+    genreMatches.forEach(m => {
+      if (m && m.id && !seenIds.has(m.id)) {
+        mergedList.push(m);
+        seenIds.add(m.id);
+      }
+    });
+
+    // 4. If we still have fewer than 6 movies, fill with highest rated unwatched movies from the catalog
+    if (mergedList.length < 6) {
+      const highestRated = [...uniqueMovies]
+        .filter(m => !watchedMovieIds.has(m.id))
+        .sort((a, b) => (b.rating || 0) - (a.rating || 0));
+
+      highestRated.forEach(m => {
+        if (mergedList.length >= 10) return;
+        if (m && m.id && !seenIds.has(m.id)) {
+          mergedList.push(m);
+          seenIds.add(m.id);
+        }
+      });
+    }
+
+    return mergedList.slice(0, 10);
+  }, [uniqueMovies, recommendations, watchHistory]);
 
   // Create stable primitive dependencies for recommendations fetching
   const watchHistoryIdsKey = useMemo(() => {
@@ -597,6 +838,134 @@ export default function HomeView({
         </div>
       </motion.div>
 
+      {/* Premium Active Custom App Banner Injection (16:9 selected design) */}
+      {showAppBanner && currentUser?.isPremium && (
+        <motion.div
+          initial={{ opacity: 0, y: -20, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          className={`aspect-[16/9] w-full rounded-2xl relative overflow-hidden flex flex-col justify-end p-5 md:p-8 border shadow-2xl transition-all duration-500 ease-out shrink-0 mb-4 ${
+            selectedBannerIndex === 0
+              ? "bg-gradient-to-br from-[#0c0a09] via-[#1c1917] to-[#0c0a09] border-[#d4af37]/40 text-white shadow-[0_0_25px_rgba(212,175,55,0.15)]"
+              : selectedBannerIndex === 1
+                ? "bg-gradient-to-br from-[#0d001a] via-[#050014] to-[#120024] border-[#00f5ff]/40 text-white shadow-[0_0_25px_rgba(0,245,255,0.15)]"
+                : selectedBannerIndex === 2
+                  ? "bg-gradient-to-br from-[#1c0202] via-[#0d0101] to-[#240303] border-[#f43f5e]/40 text-white shadow-[0_0_25px_rgba(244,63,94,0.15)]"
+                  : selectedBannerIndex === 3
+                    ? "bg-gradient-to-br from-[#010314] via-[#050616] to-[#0f021c] border-[#8b5cf6]/40 text-white shadow-[0_0_25px_rgba(139,92,246,0.15)]"
+                    : "bg-gradient-to-br from-[#01140e] via-[#000503] to-[#032115] border-[#10b981]/40 text-white shadow-[0_0_25px_rgba(16,185,129,0.15)]"
+          }`}
+          style={{
+            backgroundImage: 
+              selectedBannerIndex === 0 ? "radial-gradient(circle at center, rgba(212,175,55,0.1) 0%, transparent 70%)" :
+              selectedBannerIndex === 1 ? "radial-gradient(circle at center, rgba(0,245,255,0.1) 0%, transparent 70%)" :
+              selectedBannerIndex === 2 ? "radial-gradient(circle at center, rgba(244,63,94,0.1) 0%, transparent 70%)" :
+              selectedBannerIndex === 3 ? "radial-gradient(circle at center, rgba(139,92,246,0.1) 0%, transparent 70%)" :
+              "radial-gradient(circle at center, rgba(16,185,129,0.1) 0%, transparent 70%)"
+          }}
+        >
+          {/* Atmospheric ambient drop gradient */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent z-0 pointer-events-none" />
+          
+          {/* Tag Watermark Badge */}
+          <div className="absolute top-4 right-4 z-10">
+            <span 
+              className="text-[9px] font-tech font-extrabold border px-2.5 py-1 rounded-md bg-black/45 backdrop-blur shadow uppercase tracking-widest flex items-center gap-1"
+              style={{
+                borderColor: 
+                  selectedBannerIndex === 0 ? "#D4AF37" :
+                  selectedBannerIndex === 1 ? "#00f5ff" :
+                  selectedBannerIndex === 2 ? "#f43f5e" :
+                  selectedBannerIndex === 3 ? "#8b5cf6" :
+                  "#10b981",
+                color:
+                  selectedBannerIndex === 0 ? "#D4AF37" :
+                  selectedBannerIndex === 1 ? "#00f5ff" :
+                  selectedBannerIndex === 2 ? "#f43f5e" :
+                  selectedBannerIndex === 3 ? "#8b5cf6" :
+                  "#10b981"
+              }}
+            >
+              <Sparkles className="w-3 h-3 animate-spin shrink-0" style={{ animationDuration: '6s' }} />
+              {
+                selectedBannerIndex === 0 ? "ROYAL VIP" :
+                selectedBannerIndex === 1 ? "FUTURE 8K" :
+                selectedBannerIndex === 2 ? "LEGENDS ONLY" :
+                selectedBannerIndex === 3 ? "COSMIC STREAMS" :
+                "CONNOISSEUR'S DECK"
+              }
+            </span>
+          </div>
+
+          {/* Banner Content */}
+          <div className="relative z-10 flex flex-col gap-1.5 text-left max-w-[90%] md:max-w-[70%]">
+            <div className="flex items-center gap-1.5">
+              <Crown className="w-4.5 h-4.5 text-gold-base shrink-0 animate-bounce" />
+              <span className="text-[10px] font-tech font-black uppercase tracking-widest text-gold-base">
+                {
+                  selectedBannerIndex === 0 ? "ROYAL VIP" :
+                  selectedBannerIndex === 1 ? "FUTURE 8K" :
+                  selectedBannerIndex === 2 ? "LEGENDS ONLY" :
+                  selectedBannerIndex === 3 ? "COSMIC STREAMS" :
+                  "CONNOISSEUR'S DECK"
+                } MASTERPIECE
+              </span>
+            </div>
+            
+            <h3 className="text-sm sm:text-lg md:text-2xl font-serif font-black tracking-wide leading-tight drop-shadow uppercase text-white">
+              {
+                selectedBannerIndex === 0 ? "ELITE PLEX GRAND VIP" :
+                selectedBannerIndex === 1 ? "NEON FUTURE 8K RESOLUTION" :
+                selectedBannerIndex === 2 ? "GOLDEN AGE CINEMA" :
+                selectedBannerIndex === 3 ? "INTERSTELLAR PLATINUM VIP" :
+                "IMPERIAL JADE SELECTION"
+              }
+            </h3>
+            
+            <p className="text-[10px] sm:text-xs text-white/95 font-medium tracking-wide">
+              {
+                selectedBannerIndex === 0 ? "EXPERIENCE THE PINNACLE OF LUXURY CINEMA" :
+                selectedBannerIndex === 1 ? "VIP EDGE PIPELINE - QUANTUM TUNNEL CHANNELS ACTIVE" :
+                selectedBannerIndex === 2 ? "CURATED CLASSIC HOLLYWOOD & BOLLYWOOD MASTERPIECES" :
+                selectedBannerIndex === 3 ? "DURABLE UNIFIED COSMIC ATMOSPHERIC INTERFACE" :
+                "EXCLUSIVELY CRAFTED CHANNELS & INDEPENDENT OSCAR WINNERS"
+              }
+            </p>
+            
+            <p className="text-[9px] sm:text-xs text-white/60 font-light line-clamp-1 max-w-[85%] mt-0.5">
+              {
+                selectedBannerIndex === 0 ? "Unrestricted master catalog stream access with lossless Dolby soundscapes." :
+                selectedBannerIndex === 1 ? "Hyper-bitrate streaming running directly on fiber tier-1 CDN trans-pacific routes." :
+                selectedBannerIndex === 2 ? "A timeless hand-picked archive preserved in pristine direct master Cinerama copy." :
+                selectedBannerIndex === 3 ? "Astral-grade scene ambient lighting projections mapped live to your display device." :
+                "Premium independent masterworks and live global awards in silk-smooth 120 FPS."
+              }
+            </p>
+
+            <div className="flex items-center gap-2 mt-3">
+              <button 
+                onClick={() => {
+                  if (typeof playInterfaceTick === 'function') playInterfaceTick();
+                  alert("Premium Edge Stream Session initialized successfully! Buffering lossless raw codec copy...");
+                }}
+                className="gold-gradient-bg text-black font-tech text-[9px] sm:text-xs font-black px-4 py-2 rounded-xl flex items-center gap-1.5 hover:brightness-110 active:scale-95 transition-all cursor-pointer shadow-md"
+              >
+                <Play className="w-2.5 h-2.5 fill-current" />
+                LAUNCH STREAM
+              </button>
+              <button 
+                onClick={() => {
+                  if (typeof playInterfaceTick === 'function') playInterfaceTick();
+                  alert("Decryption Channel locked as prioritized premium favorite.");
+                }}
+                className="bg-white/10 border border-white/10 text-white font-tech text-[9px] sm:text-xs font-extrabold px-4 py-2 rounded-xl flex items-center gap-1.5 hover:bg-white/20 transition-all cursor-pointer"
+              >
+                ADD FAVORITES
+              </button>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       {/* 3. Hero Visual Spotlight Banner Carousel (3-card peek slider effect) */}
       {activeSpotlight && (
         <div className="flex flex-col gap-3.5 relative py-2 overflow-hidden w-full select-none max-w-[480px] sm:max-w-[720px] md:max-w-[900px] lg:max-w-[1050px] mx-auto animate-fade-in">
@@ -799,6 +1168,7 @@ export default function HomeView({
               syncIcon
               isDarkMode={isDarkMode}
               language={language}
+              onGenreClick={setSelectedGenre}
             />
           )}
 
@@ -813,6 +1183,7 @@ export default function HomeView({
               watchIds={watchlistIds}
               isDarkMode={isDarkMode}
               language={language}
+              onGenreClick={setSelectedGenre}
             />
           )}
 
@@ -853,50 +1224,50 @@ export default function HomeView({
               isDarkMode={isDarkMode}
               language={language}
               showRecentlyAddedBadge={true}
+              onGenreClick={setSelectedGenre}
             />
           )}
 
-          {/* Gemini AI Recommendations Section */}
-          {(recommendations.length > 0 || loadingRecommendations) && (
-            <div className="flex flex-col gap-1">
-              {loadingRecommendations ? (
-                <div className="flex flex-col gap-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex flex-col">
-                      <h3 className={`text-md font-serif font-bold tracking-wide uppercase italic flex items-center gap-2 ${isDarkMode ? 'text-white' : 'text-black'}`}>
-                        <Sparkles className="w-4 h-4 text-gold-base shrink-0 animate-pulse" />
-                        {translateText("Recommended for You", language)}
-                      </h3>
-                      <p className={`text-[8px] uppercase tracking-widest font-tech mt-0.5 leading-relaxed ${isDarkMode ? 'text-white/40' : 'text-black/55'}`}>
-                        {translateText("ANALYSING YOUR VIEWING FOOTPRINT...", language)}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-none animate-pulse">
-                    {Array.from({ length: 5 }).map((_, idx) => (
-                      <div key={`rec-loader-${idx}`} className="shrink-0 w-32 flex flex-col gap-2">
-                        <div className={`aspect-[2/3] rounded-[20px] ${isDarkMode ? 'bg-neutral-900 border border-neutral-800' : 'bg-neutral-200 border border-neutral-300'}`} />
-                        <div className={`h-3 w-3/4 rounded ${isDarkMode ? 'bg-neutral-900' : 'bg-neutral-200'}`} />
-                        <div className={`h-2.5 w-1/2 rounded ${isDarkMode ? 'bg-neutral-900' : 'bg-neutral-200'}`} />
-                      </div>
-                    ))}
+          {/* Genre-based & AI Recommendations Section */}
+          <div className="flex flex-col gap-1">
+            {loadingRecommendations && computedRecommendations.length === 0 ? (
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col">
+                    <h3 className={`text-md font-serif font-bold tracking-wide uppercase italic flex items-center gap-2 ${isDarkMode ? 'text-white' : 'text-black'}`}>
+                      <Sparkles className="w-4 h-4 text-gold-base shrink-0 animate-pulse" />
+                      {translateText("Recommended for You", language)}
+                    </h3>
+                    <p className={`text-[8px] uppercase tracking-widest font-tech mt-0.5 leading-relaxed ${isDarkMode ? 'text-white/40' : 'text-black/55'}`}>
+                      {translateText("ANALYSING YOUR VIEWING FOOTPRINT...", language)}
+                    </p>
                   </div>
                 </div>
-              ) : (
-                <MovieRow
-                  title="Recommended for You"
-                  subtitle={isFallbackMode ? "GENRE-BASED HEURISTICS ENGINE" : "CUSTOMIZED BLOCKBUSTER CURATIONS"}
-                  movies={recommendations}
-                  onSelect={onSelectMovie}
-                  onToggleWatch={onToggleWatchlist}
-                  watchIds={watchlistIds}
-                  sparkleIcon
-                  isDarkMode={isDarkMode}
-                  language={language}
-                />
-              )}
-            </div>
-          )}
+                <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-none animate-pulse">
+                  {Array.from({ length: 5 }).map((_, idx) => (
+                    <div key={`rec-loader-${idx}`} className="shrink-0 w-32 flex flex-col gap-2">
+                      <div className={`aspect-[2/3] rounded-[20px] ${isDarkMode ? 'bg-neutral-900 border border-neutral-800' : 'bg-neutral-200 border border-neutral-300'}`} />
+                      <div className={`h-3 w-3/4 rounded ${isDarkMode ? 'bg-neutral-900' : 'bg-neutral-200'}`} />
+                      <div className={`h-2.5 w-1/2 rounded ${isDarkMode ? 'bg-neutral-900' : 'bg-neutral-200'}`} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <MovieRow
+                title="Recommended for You"
+                subtitle={topWatchedGenres.length > 0 ? `FILTERED BY YOUR INTEREST IN ${topWatchedGenres.join(", ").toUpperCase()}` : "HIGHLY RATED BLOCKBUSTER CURATIONS"}
+                movies={computedRecommendations}
+                onSelect={onSelectMovie}
+                onToggleWatch={onToggleWatchlist}
+                watchIds={watchlistIds}
+                sparkleIcon
+                isDarkMode={isDarkMode}
+                language={language}
+                onGenreClick={setSelectedGenre}
+              />
+            )}
+          </div>
 
           {/* 6. Popular Cinematic Row (Syncs with TMDB layout) */}
           {popularCinematic.length > 0 && (
@@ -910,6 +1281,7 @@ export default function HomeView({
               syncIcon
               isDarkMode={isDarkMode}
               language={language}
+              onGenreClick={setSelectedGenre}
             />
           )}
 
@@ -928,6 +1300,7 @@ export default function HomeView({
                 watchIds={watchlistIds}
                 isDarkMode={isDarkMode}
                 language={language}
+                onGenreClick={setSelectedGenre}
               />
             );
           })}
@@ -947,6 +1320,7 @@ export default function HomeView({
                 watchIds={watchlistIds}
                 isDarkMode={isDarkMode}
                 language={language}
+                onGenreClick={setSelectedGenre}
               />
             );
           })}
@@ -1035,6 +1409,145 @@ export default function HomeView({
             </div>
           </div>
 
+          {/* Watch Next Queue */}
+          <div className="flex flex-col gap-4 mt-2">
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col">
+                <h3 className={`text-md font-serif font-bold tracking-wide uppercase italic flex items-center gap-2 ${isDarkMode ? 'text-white' : 'text-black'}`}>
+                  <Clock className="w-4 h-4 text-gold-base shrink-0" />
+                  {translateText("Watch Next", language)}
+                </h3>
+                <span className={`text-[8px] uppercase tracking-widest font-tech mt-0.5 ${isDarkMode ? 'text-white/40' : 'text-black/55'}`}>UPCOMING EPISODES LOBBY</span>
+              </div>
+            </div>
+
+            <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-none">
+              {watchNextQueue.length > 0 ? (
+                watchNextQueue.map((item, idx) => {
+                  const s = item.series;
+                  const ep = item.upcomingEpisode;
+                  const thumb = ep.thumbnailUrl || s.backdropUrl || s.posterUrl;
+                  
+                  return (
+                    <motion.div
+                      key={`watch-next-item-${s.id}-${ep.id}-${idx}`}
+                      onClick={() => handlePlayUpcomingEpisode(s, ep)}
+                      whileHover={{ y: -4, scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      className="flex flex-col gap-2 shrink-0 w-64 cursor-pointer group select-none"
+                    >
+                      <div className={`relative aspect-video rounded-xxl overflow-hidden border shadow-md transition-all duration-300 group-hover:shadow-[0_0_15px_rgba(212,175,55,0.25)] group-hover:border-gold-base/40 ${
+                        isDarkMode ? 'border-white/5 bg-[#141212]' : 'border-black/[0.08] bg-white'
+                      }`}>
+                        <img 
+                          src={thumb} 
+                          alt={ep.title} 
+                          referrerPolicy="no-referrer" 
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
+                        />
+                        
+                        {/* Play Button Overlay */}
+                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                          <div className="w-12 h-12 rounded-full bg-gold-base/95 flex items-center justify-center shadow-lg transform scale-90 group-hover:scale-100 transition-transform duration-300">
+                            <Play className="w-5 h-5 text-black fill-black ml-0.5" />
+                          </div>
+                        </div>
+
+                        {/* Season/Episode Badge */}
+                        <div className="absolute top-3 left-3 bg-black/75 border border-white/10 px-2.5 py-0.5 rounded-full text-[9px] font-mono tracking-wider text-gold-base font-bold uppercase backdrop-blur-sm">
+                          S{ep.seasonNumber}:E{ep.episodeNumber}
+                        </div>
+
+                        {/* Remaining Count Badge */}
+                        {item.remainingCount > 1 && (
+                          <div className="absolute bottom-3 right-3 bg-gold-base/95 text-black text-[8px] font-tech font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shadow-sm">
+                            +{item.remainingCount} more
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex flex-col px-1">
+                        <h4 className={`text-xs font-bold truncate group-hover:text-gold-base transition-colors uppercase tracking-wide leading-tight ${isDarkMode ? 'text-white' : 'text-black'}`}>
+                          {translateText(s.title, language)}
+                        </h4>
+                        <p className={`text-[10px] font-medium truncate mt-0.5 ${isDarkMode ? 'text-white/70' : 'text-black/80'}`}>
+                          {ep.episodeNumber}. {translateText(ep.title, language)}
+                        </p>
+                        <span className={`text-[8px] font-tech mt-0.5 ${isDarkMode ? 'text-white/40' : 'text-black/55'}`}>
+                          {ep.duration || '45m'} • UP NEXT
+                        </span>
+                      </div>
+                    </motion.div>
+                  );
+                })
+              ) : suggestedQueue.length > 0 ? (
+                // If there is no series actively in progress, show suggestions
+                suggestedQueue.map((item, idx) => {
+                  if (!item) return null;
+                  const s = item.series;
+                  const ep = item.upcomingEpisode;
+                  const thumb = ep.thumbnailUrl || s.backdropUrl || s.posterUrl;
+
+                  return (
+                    <motion.div
+                      key={`watch-next-suggest-${s.id}-${idx}`}
+                      onClick={() => handlePlayUpcomingEpisode(s, ep)}
+                      whileHover={{ y: -4, scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      className="flex flex-col gap-2 shrink-0 w-64 cursor-pointer group select-none opacity-80 hover:opacity-100 transition-opacity"
+                    >
+                      <div className={`relative aspect-video rounded-xxl overflow-hidden border shadow-md transition-all duration-300 group-hover:border-gold-base/40 ${
+                        isDarkMode ? 'border-white/5 bg-[#141212]' : 'border-black/[0.08] bg-white'
+                      }`}>
+                        <img 
+                          src={thumb} 
+                          alt={ep.title} 
+                          referrerPolicy="no-referrer" 
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
+                        />
+                        
+                        {/* Play Button Overlay */}
+                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                          <div className="w-12 h-12 rounded-full bg-gold-base/95 flex items-center justify-center shadow-lg transform scale-90 group-hover:scale-100 transition-transform duration-300">
+                            <Play className="w-5 h-5 text-black fill-black ml-0.5" />
+                          </div>
+                        </div>
+
+                        {/* Season/Episode Badge */}
+                        <div className="absolute top-3 left-3 bg-black/75 border border-white/10 px-2.5 py-0.5 rounded-full text-[9px] font-mono tracking-wider text-gold-base font-bold uppercase backdrop-blur-sm">
+                          S{ep.seasonNumber}:E{ep.episodeNumber}
+                        </div>
+
+                        {/* Recommendation Badge */}
+                        <div className="absolute bottom-3 right-3 bg-white/15 text-white border border-white/10 text-[8px] font-tech font-bold px-2 py-0.5 rounded-full uppercase tracking-wider backdrop-blur-sm">
+                          SUGGESTED
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col px-1">
+                        <h4 className={`text-xs font-bold truncate group-hover:text-gold-base transition-colors uppercase tracking-wide leading-tight ${isDarkMode ? 'text-white' : 'text-black'}`}>
+                          {translateText(s.title, language)}
+                        </h4>
+                        <p className={`text-[10px] font-medium truncate mt-0.5 ${isDarkMode ? 'text-white/70' : 'text-black/80'}`}>
+                          {translateText("Series Premiere", language)}: {translateText(ep.title, language)}
+                        </p>
+                        <span className={`text-[8px] font-tech mt-0.5 ${isDarkMode ? 'text-white/40' : 'text-black/55'}`}>
+                          {item.remainingCount} EPISODES • START WATCHING
+                        </span>
+                      </div>
+                    </motion.div>
+                  );
+                })
+              ) : (
+                <div className={`w-full py-10 text-center border border-dashed rounded-[20px] text-[10px] uppercase tracking-widest font-tech ${
+                  isDarkMode ? 'bg-white/[0.02] border-white/5 text-white/30' : 'bg-black/[0.02] border-black/10 text-black/45'
+                }`}>
+                  {translateText("No serials found to queue", language)}
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* 8. Popular TV Series Row */}
           {tvSeries.length > 0 && (
             <MovieRow
@@ -1045,6 +1558,7 @@ export default function HomeView({
               watchIds={watchlistIds}
               isDarkMode={isDarkMode}
               language={language}
+              onGenreClick={setSelectedGenre}
             />
           )}
 
@@ -1058,6 +1572,7 @@ export default function HomeView({
               watchIds={watchlistIds}
               isDarkMode={isDarkMode}
               language={language}
+              onGenreClick={setSelectedGenre}
             />
           )}
         </>
@@ -1080,6 +1595,7 @@ interface MovieRowProps {
   isDarkMode: boolean;
   language?: string;
   showRecentlyAddedBadge?: boolean;
+  onGenreClick?: (genre: string) => void;
 }
 
 function getRecentlyAddedBadgeText(createdAt?: string): string {
@@ -1109,7 +1625,7 @@ function getRecentlyAddedBadgeText(createdAt?: string): string {
   }
 }
 
-function MovieRow({ title, subtitle, movies, onSelect, onToggleWatch, watchIds, syncIcon = false, sparkleIcon = false, isDarkMode, language = 'English', showRecentlyAddedBadge = false }: MovieRowProps) {
+function MovieRow({ title, subtitle, movies, onSelect, onToggleWatch, watchIds, syncIcon = false, sparkleIcon = false, isDarkMode, language = 'English', showRecentlyAddedBadge = false, onGenreClick }: MovieRowProps) {
   return (
     <div className="flex flex-col gap-4">
       {/* Row Header */}
@@ -1235,7 +1751,35 @@ function MovieRow({ title, subtitle, movies, onSelect, onToggleWatch, watchIds, 
                     >
                       {translateText(m.title, language)}
                     </h4>
-                    <span className={`text-[10px] font-mono mt-0.5 ${isDarkMode ? 'text-white/40' : 'text-black/55'}`}>{m.year}</span>
+                    <div className="flex items-center justify-between gap-1.5 mt-0.5">
+                      <span className={`text-[10px] font-mono shrink-0 ${isDarkMode ? 'text-white/40' : 'text-black/55'}`}>{m.year}</span>
+                      
+                      {/* Clickable Genre tags on Card! */}
+                      {m.genres && Array.isArray(m.genres) && m.genres.length > 0 && (
+                        <div className="flex gap-1 overflow-hidden">
+                          {m.genres.slice(0, 1).map((g, gIdx) => (
+                            <button
+                              key={`${m.id}-genre-${g}-${gIdx}`}
+                              id={`card-genre-${m.id}-${g}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (typeof onGenreClick === 'function') {
+                                  onGenreClick(g);
+                                }
+                              }}
+                              className={`text-[7px] font-mono px-1 rounded transition-all cursor-pointer font-bold select-none truncate max-w-[54px] border ${
+                                isDarkMode 
+                                  ? 'bg-gold-base/5 text-gold-base border-gold-base/20 hover:bg-gold-base/20 hover:text-white' 
+                                  : 'bg-gold-dark/5 text-gold-dark border-gold-dark/20 hover:bg-gold-dark/20 hover:text-black'
+                              }`}
+                              title={`Click to filter by ${g}`}
+                            >
+                              {g}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </motion.div>
               );

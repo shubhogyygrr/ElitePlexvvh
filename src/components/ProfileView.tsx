@@ -7,7 +7,7 @@ import {
   User, Settings, Sparkles, HardDrive, Bell, Eye, LogOut,
   ChevronRight, Volume2, Shield, Languages, Globe, RefreshCw, Crown,
   Trash2, X, AlertTriangle, Sun, Moon, Palette, Play, Search, Check, Activity, Server,
-  Clock, Monitor, Calendar, Download, Upload, Zap, Tv, Key, Cookie, Database
+  Clock, Monitor, Calendar, Download, Upload, Zap, Tv, Key, Cookie, Database, Edit, Plus
 } from 'lucide-react';
 import { 
   addMovieRequestToFirestore, 
@@ -81,6 +81,59 @@ const LANGUAGES: LanguageOption[] = [
   { id: 'Catalan', name: 'Catalan', native: 'Català', code: 'CA', premium: true },
   { id: 'Croatian', name: 'Croatian', native: 'Hrvatski', code: 'HR', premium: true },
   { id: 'Bulgarian', name: 'Bulgarian', native: 'Български', code: 'BG', premium: true }
+];
+
+export const BANNER_DESIGNS = [
+  {
+    name: "Royal Cinema Gold",
+    tag: "ROYAL VIP",
+    title: "ELITE PLEX GRAND VIP",
+    subtitle: "EXPERIENCE THE PINNACLE OF LUXURY CINEMA",
+    desc: "Unrestricted master catalog stream access with lossless Dolby soundscapes.",
+    styleClasses: "bg-gradient-to-br from-[#0c0a09] via-[#1c1917] to-[#0c0a09] border-[#d4af37]/40 text-white shadow-[0_0_25px_rgba(212,175,55,0.15)]",
+    bgPattern: "radial-gradient(circle at center, rgba(212,175,55,0.1) 0%, transparent 70%)",
+    accentColor: "#D4AF37"
+  },
+  {
+    name: "Cyber Neon Horizon",
+    tag: "FUTURE 8K",
+    title: "NEON FUTURE 8K RESOLUTION",
+    subtitle: "VIP EDGE PIPELINE - QUANTUM TUNNEL ACTIVE",
+    desc: "Hyper-bitrate streaming running directly on fiber tier-1 CDN trans-pacific routes.",
+    styleClasses: "bg-gradient-to-br from-[#0d001a] via-[#050014] to-[#120024] border-[#00f5ff]/40 text-white shadow-[0_0_25px_rgba(0,245,255,0.15)]",
+    bgPattern: "radial-gradient(circle at center, rgba(0,245,255,0.1) 0%, transparent 70%)",
+    accentColor: "#00f5ff"
+  },
+  {
+    name: "Retro Wine Nostalgia",
+    tag: "LEGENDS ONLY",
+    title: "GOLDEN AGE CINEMA",
+    subtitle: "CURATED CLASSIC HOLLYWOOD & BOLLYWOOD MASTERPIECES",
+    desc: "A timeless hand-picked archive preserved in pristine direct master Cinerama copy.",
+    styleClasses: "bg-gradient-to-br from-[#1c0202] via-[#0d0101] to-[#240303] border-[#f43f5e]/40 text-white shadow-[0_0_25px_rgba(244,63,94,0.15)]",
+    bgPattern: "radial-gradient(circle at center, rgba(244,63,94,0.1) 0%, transparent 70%)",
+    accentColor: "#f43f5e"
+  },
+  {
+    name: "Astral Nebula",
+    tag: "COSMIC STREAMS",
+    title: "INTERSTELLAR PLATINUM VIP",
+    subtitle: "DURABLE UNIFIED COSMIC INTERFACE",
+    desc: "Astral-grade scene ambient lighting projections mapped live to your display device.",
+    styleClasses: "bg-gradient-to-br from-[#010314] via-[#050616] to-[#0f021c] border-[#8b5cf6]/40 text-white shadow-[0_0_25px_rgba(139,92,246,0.15)]",
+    bgPattern: "radial-gradient(circle at center, rgba(139,92,246,0.1) 0%, transparent 70%)",
+    accentColor: "#8b5cf6"
+  },
+  {
+    name: "Imperial Emerald Jade",
+    tag: "CONNOISSEUR'S DECK",
+    title: "IMPERIAL JADE SELECTION",
+    subtitle: "EXCLUSIVELY CRAFTED CHANNELS & INDEPENDENT MASTERWORKS",
+    desc: "Premium independent masterworks and live global awards in silk-smooth 120 FPS.",
+    styleClasses: "bg-gradient-to-br from-[#01140e] via-[#000503] to-[#032115] border-[#10b981]/40 text-white shadow-[0_0_25px_rgba(16,185,129,0.15)]",
+    bgPattern: "radial-gradient(circle at center, rgba(16,185,129,0.1) 0%, transparent 70%)",
+    accentColor: "#10b981"
+  }
 ];
 
 interface ProfileViewProps {
@@ -213,6 +266,25 @@ export default function ProfileView({
   React.useEffect(() => {
     localStorage.setItem('ep_vip_relay', vipRelay);
   }, [vipRelay]);
+
+  // Premium App Banner Designer States
+  const [selectedBannerIndex, setSelectedBannerIndex] = useState(() => {
+    const saved = localStorage.getItem('ep_selected_banner_index');
+    return saved ? parseInt(saved, 10) : 0;
+  });
+  const [showAppBanner, setShowAppBanner] = useState(() => {
+    return localStorage.getItem('ep_show_app_banner') === 'true';
+  });
+
+  React.useEffect(() => {
+    localStorage.setItem('ep_selected_banner_index', String(selectedBannerIndex));
+    window.dispatchEvent(new Event('ep-banner-settings-updated'));
+  }, [selectedBannerIndex]);
+
+  React.useEffect(() => {
+    localStorage.setItem('ep_show_app_banner', String(showAppBanner));
+    window.dispatchEvent(new Event('ep-banner-settings-updated'));
+  }, [showAppBanner]);
 
   const [showBulkImportHistory, setShowBulkImportHistory] = useState(false);
   const [bulkHistoryJson, setBulkHistoryJson] = useState("");
@@ -374,6 +446,131 @@ export default function ProfileView({
   const [showSwitchModal, setShowSwitchModal] = useState(false);
   const [showRedeemModal, setShowRedeemModal] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
+  
+  // Name edit state
+  const [showEditNameModal, setShowEditNameModal] = useState(false);
+  const [editNameValue, setEditNameValue] = useState(currentUser?.name || '');
+
+  // 3 Premium Tables States
+  const [customChannels, setCustomChannels] = useState<{ id: string; name: string; url: string; bitrate: string }[]>(() => {
+    try {
+      const saved = localStorage.getItem('ep_custom_channels');
+      return saved ? JSON.parse(saved) : [
+        { id: '1', name: 'Ultra HD Direct Stream', url: 'https://cdn.eliteplex.stream/live-4k', bitrate: '120 Mbps' },
+        { id: '2', name: 'Dolby Atmos Audio Relay', url: 'https://audio.eliteplex.stream/atmos', bitrate: '3.2 Mbps' },
+        { id: '3', name: 'IMAX Laser Projection Feed', url: 'https://imax.eliteplex.stream/feed', bitrate: '250 Mbps' }
+      ];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  const [cdnRelays, setCdnRelays] = useState<{ id: string; name: string; ip: string; latency: string }[]>(() => {
+    try {
+      const saved = localStorage.getItem('ep_cdn_relays');
+      return saved ? JSON.parse(saved) : [
+        { id: '1', name: 'Geneva SuperNode IP-92', ip: '192.168.42.12', latency: '4.2 ms' },
+        { id: '2', name: 'Tokyo Quantum Relay IP-15', ip: '10.24.155.8', latency: '12.8 ms' },
+        { id: '3', name: 'New York Laser Uplink IP-01', ip: '172.16.0.1', latency: '1.5 ms' }
+      ];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  const [displayFilters, setDisplayFilters] = useState<{ id: string; name: string; ratio: string; luma: string }[]>(() => {
+    try {
+      const saved = localStorage.getItem('ep_display_filters');
+      return saved ? JSON.parse(saved) : [
+        { id: '1', name: 'Cinematic Anamorphic De-Squeeze', ratio: '2.39:1', luma: '+15% Gain' },
+        { id: '2', name: 'Vintage Technicolor Grade-04', ratio: '4:3 Academy', luma: '-10% Gain' },
+        { id: '3', name: 'HDR10+ Hyper-Contrast Mask', ratio: '16:9 Screen', luma: '+25% Gain' }
+      ];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  // State values for adding custom items to premium tables
+  const [addChanName, setAddChanName] = useState('');
+  const [addChanUrl, setAddChanUrl] = useState('');
+  const [addChanBitrate, setAddChanBitrate] = useState('');
+
+  const [addCdnName, setAddCdnName] = useState('');
+  const [addCdnIp, setAddCdnIp] = useState('');
+  const [addCdnLatency, setAddCdnLatency] = useState('');
+
+  const [addFiltName, setAddFiltName] = useState('');
+  const [addFiltRatio, setAddFiltRatio] = useState('');
+  const [addFiltLuma, setAddFiltLuma] = useState('');
+
+  // Handlers for adding custom rows
+  const handleAddChannel = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addChanName.trim() || !addChanUrl.trim() || !addChanBitrate.trim()) return;
+    if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    const newItem = { id: `chan_${Date.now()}`, name: addChanName.trim(), url: addChanUrl.trim(), bitrate: addChanBitrate.trim() };
+    const updated = [...customChannels, newItem];
+    setCustomChannels(updated);
+    localStorage.setItem('ep_custom_channels', JSON.stringify(updated));
+    setAddChanName('');
+    setAddChanUrl('');
+    setAddChanBitrate('');
+  };
+
+  const handleAddCdnRelay = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addCdnName.trim() || !addCdnIp.trim() || !addCdnLatency.trim()) return;
+    if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    const newItem = { id: `cdn_${Date.now()}`, name: addCdnName.trim(), ip: addCdnIp.trim(), latency: addCdnLatency.trim() };
+    const updated = [...cdnRelays, newItem];
+    setCdnRelays(updated);
+    localStorage.setItem('ep_cdn_relays', JSON.stringify(updated));
+    setAddCdnName('');
+    setAddCdnIp('');
+    setAddCdnLatency('');
+  };
+
+  const handleAddDisplayFilter = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addFiltName.trim() || !addFiltRatio.trim() || !addFiltLuma.trim()) return;
+    if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    const newItem = { id: `filt_${Date.now()}`, name: addFiltName.trim(), ratio: addFiltRatio.trim(), luma: addFiltLuma.trim() };
+    const updated = [...displayFilters, newItem];
+    setDisplayFilters(updated);
+    localStorage.setItem('ep_display_filters', JSON.stringify(updated));
+    setAddFiltName('');
+    setAddFiltRatio('');
+    setAddFiltLuma('');
+  };
+
+  const handleDeleteChannel = (id: string) => {
+    if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    const updated = customChannels.filter(c => c.id !== id);
+    setCustomChannels(updated);
+    localStorage.setItem('ep_custom_channels', JSON.stringify(updated));
+  };
+
+  const handleDeleteCdnRelay = (id: string) => {
+    if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    const updated = cdnRelays.filter(r => r.id !== id);
+    setCdnRelays(updated);
+    localStorage.setItem('ep_cdn_relays', JSON.stringify(updated));
+  };
+
+  const handleDeleteDisplayFilter = (id: string) => {
+    if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    const updated = displayFilters.filter(f => f.id !== id);
+    setDisplayFilters(updated);
+    localStorage.setItem('ep_display_filters', JSON.stringify(updated));
+  };
+
+  // Keep edit input updated when currentUser profile changes
+  React.useEffect(() => {
+    if (currentUser?.name) {
+      setEditNameValue(currentUser.name);
+    }
+  }, [currentUser]);
   
   // Redeem Code States
   const [redeemCode, setRedeemCode] = useState('');
@@ -1854,6 +2051,155 @@ export default function ProfileView({
               </div>
             )}
 
+            {/* Premium Custom App Banner selection & 16:9 previews (5 designs) */}
+            {currentUser.isPremium && (
+              <div className="luxury-glass p-5 rounded-[24px] border-white/5 flex flex-col gap-5">
+                <div className="flex flex-col text-left">
+                  <span className="text-xs font-serif font-black text-white tracking-widest uppercase flex items-center gap-1.5">
+                    <Crown className="w-4.5 h-4.5 text-gold-base animate-pulse" />
+                    PREMIUM APP BANNER DESIGNER
+                  </span>
+                  <span className="text-[10px] text-white/40">Choose from 5 exquisitely crafted 16:9 cinematic premium layouts to show in the main app</span>
+                </div>
+
+                {/* 16:9 Active Banner Preview Screen */}
+                <div className="flex flex-col gap-2">
+                  <span className="text-[9px] font-tech text-gold-base tracking-widest uppercase flex items-center gap-1">
+                    <Eye className="w-3.5 h-3.5" />
+                    16:9 REAL-TIME ACCURACY PREVIEW
+                  </span>
+                  
+                  <div 
+                    style={{ backgroundImage: BANNER_DESIGNS[selectedBannerIndex].bgPattern }}
+                    className={`aspect-[16/9] w-full rounded-2xl relative overflow-hidden flex flex-col justify-end p-5 md:p-6 transition-all duration-500 ease-out border shadow-2xl ${
+                      BANNER_DESIGNS[selectedBannerIndex].styleClasses
+                    }`}
+                  >
+                    {/* Atmospheric gold shimmer background effect */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent z-0 pointer-events-none" />
+                    
+                    {/* VIP Watermark Badge */}
+                    <div className="absolute top-4 right-4 z-10">
+                      <span 
+                        style={{ borderColor: BANNER_DESIGNS[selectedBannerIndex].accentColor, color: BANNER_DESIGNS[selectedBannerIndex].accentColor }}
+                        className="text-[9px] font-tech font-extrabold border px-2.5 py-1 rounded-md bg-black/45 backdrop-blur shadow uppercase tracking-widest flex items-center gap-1"
+                      >
+                        <Sparkles className="w-3 h-3 animate-spin" style={{ animationDuration: '6s' }} />
+                        {BANNER_DESIGNS[selectedBannerIndex].tag}
+                      </span>
+                    </div>
+
+                    {/* Banner Content Layout */}
+                    <div className="relative z-10 flex flex-col gap-1.5 text-left">
+                      <div className="flex items-center gap-1.5">
+                        <Crown className="w-4 h-4 text-gold-base shrink-0 animate-bounce" />
+                        <span className="text-[10px] font-tech font-black uppercase tracking-widest text-gold-base">
+                          {BANNER_DESIGNS[selectedBannerIndex].tag} MASTERPIECE
+                        </span>
+                      </div>
+                      
+                      <h3 className="text-sm md:text-lg font-serif font-black tracking-wide leading-tight drop-shadow">
+                        {BANNER_DESIGNS[selectedBannerIndex].title}
+                      </h3>
+                      
+                      <p className="text-[10px] text-white/90 font-medium tracking-wide">
+                        {BANNER_DESIGNS[selectedBannerIndex].subtitle}
+                      </p>
+                      
+                      <p className="text-[8px] text-white/60 line-clamp-1 max-w-[85%] mt-0.5">
+                        {BANNER_DESIGNS[selectedBannerIndex].desc}
+                      </p>
+
+                      {/* Mini Action buttons mock */}
+                      <div className="flex items-center gap-2 mt-2">
+                        <div className="gold-gradient-bg text-black font-tech text-[8px] font-black px-3 py-1.5 rounded-lg flex items-center gap-1 hover:brightness-110 active:scale-95 transition-all">
+                          <Play className="w-2 h-2 fill-current" />
+                          LAUNCH STREAM
+                        </div>
+                        <div className="bg-white/10 border border-white/10 text-white font-tech text-[8px] font-extrabold px-3 py-1.5 rounded-lg flex items-center gap-1 hover:bg-white/20 transition-all">
+                          ADD FAVORITES
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5 Selection Buttons with Thumbnail Indicators */}
+                <div className="flex flex-col gap-2">
+                  <span className="text-[9px] font-tech text-white/50 tracking-widest uppercase">
+                    SELECT CINEMATIC VISUAL PATTERN
+                  </span>
+                  
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    {BANNER_DESIGNS.map((design, idx) => {
+                      const isSelected = selectedBannerIndex === idx;
+                      return (
+                        <button
+                          key={design.name}
+                          onClick={() => {
+                            if (typeof playInterfaceTick === 'function') playInterfaceTick();
+                            setSelectedBannerIndex(idx);
+                          }}
+                          className={`flex flex-col justify-between p-2.5 rounded-xl border text-left transition-all cursor-pointer relative overflow-hidden group ${
+                            isSelected 
+                              ? 'bg-white/5 text-white font-extrabold shadow-lg' 
+                              : 'bg-white/[0.01] border-white/5 text-white/55 hover:border-white/15'
+                          }`}
+                          style={{ borderColor: isSelected ? design.accentColor : undefined }}
+                        >
+                          {/* Selected marker accent bar */}
+                          {isSelected && (
+                            <div className="absolute top-0 left-0 right-0 h-1" style={{ backgroundColor: design.accentColor }} />
+                          )}
+                          
+                          <div className="flex flex-col gap-0.5 min-w-0">
+                            <span className="text-[9px] font-bold truncate">{design.name}</span>
+                            <span className="text-[7.5px] font-mono opacity-60 truncate">{design.tag}</span>
+                          </div>
+
+                          {/* Mini visual 16:9 block */}
+                          <div 
+                            style={{ backgroundImage: design.bgPattern, backgroundColor: design.accentColor + '10' }}
+                            className="aspect-[16/9] w-full rounded border border-white/5 mt-1.5 relative overflow-hidden shrink-0 flex items-center justify-center"
+                          >
+                            <Crown className="w-3 h-3 opacity-30" style={{ color: design.accentColor }} />
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Switch to enable banner in the Main App */}
+                <div className="bg-white/[0.02] border border-white/5 p-4 rounded-[20px] flex items-center justify-between text-xs">
+                  <div className="flex flex-col text-left max-w-[70%]">
+                    <span className="font-bold text-white flex items-center gap-1.5">
+                      <Tv className="w-4 h-4 text-gold-base" />
+                      Add Main App Banner (Show Banner)
+                    </span>
+                    <span className="text-[9px] text-white/40 leading-tight">
+                      Inject this premium custom 16:9 live preview banner directly at the top of the main application dashboard screen
+                    </span>
+                  </div>
+                  
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (typeof playInterfaceTick === 'function') playInterfaceTick();
+                      setShowAppBanner(!showAppBanner);
+                    }}
+                    className={`flex items-center gap-1 px-4 py-2 rounded-xl text-[10px] font-tech font-black tracking-widest border transition-all active:scale-95 cursor-pointer ${
+                      showAppBanner 
+                        ? 'bg-gold-base text-black border-gold-base font-black shadow-[0_0_15px_rgba(212,175,55,0.3)]' 
+                        : 'bg-white/5 border-white/10 text-white hover:bg-white/10'
+                    }`}
+                  >
+                    {showAppBanner ? "BANNER ON" : "BANNER OFF"}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Storage cache clearing */}
             <div className="flex items-center justify-between text-xs border-t border-white/5 pt-4">
               <div className="flex flex-col">
@@ -2025,13 +2371,31 @@ export default function ProfileView({
         </div>
 
         <div className="flex flex-col items-center gap-1">
-          <h2 className={`text-xl sm:text-2xl font-serif font-black tracking-wide uppercase mt-2 transition-colors duration-500 ${
-            currentUser.isPremium
-              ? 'text-transparent bg-clip-text bg-gradient-to-r from-gold-light via-gold-base to-gold-dark filter drop-shadow-[0_2px_8px_rgba(212,175,55,0.3)]'
-              : 'text-white'
-          }`}>
-            {currentUser.name}
-          </h2>
+          <div className="flex items-center gap-2 mt-2">
+            <h2 className={`text-xl sm:text-2xl font-serif font-black tracking-wide uppercase transition-colors duration-500 ${
+              currentUser.isPremium
+                ? 'text-transparent bg-clip-text bg-gradient-to-r from-gold-light via-gold-base to-gold-dark filter drop-shadow-[0_2px_8px_rgba(212,175,55,0.3)]'
+                : 'text-white'
+            }`}>
+              {currentUser.name}
+            </h2>
+            <button
+              id="edit-profile-name-button"
+              onClick={() => {
+                if (typeof playInterfaceTick === 'function') playInterfaceTick();
+                setEditNameValue(currentUser.name);
+                setShowEditNameModal(true);
+              }}
+              className={`p-1.5 rounded-full transition-all cursor-pointer hover:scale-110 active:scale-90 ${
+                currentUser.isPremium
+                  ? 'bg-gold-base/10 hover:bg-gold-base/20 text-gold-base border border-gold-base/20'
+                  : 'bg-white/5 hover:bg-white/10 text-white/60 hover:text-white border border-white/10'
+              }`}
+              title="Edit Profile Name"
+            >
+              <Edit className="w-3.5 h-3.5" />
+            </button>
+          </div>
           
           {/* Email displayed right below Profile name */}
           <p className={`text-xs font-tech lowercase mt-0.5 select-all transition-colors duration-500 ${
@@ -3003,6 +3367,369 @@ export default function ProfileView({
 
             <div className="border-t border-white/5 pt-4 text-[8px] font-tech text-white/30 text-center tracking-wider uppercase">
               MODERATORS ACTIVELY MONITOR THE TRANSMISSION FEED
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Edit Profile Name & Premium Custom Tables Modal */}
+      {showEditNameModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className={`luxury-glass p-6 sm:p-8 rounded-[32px] border ${
+              currentUser?.isPremium ? 'border-gold-base/40 w-full max-w-3xl' : 'border-white/10 w-full max-w-md'
+            } flex flex-col gap-6 shadow-2xl relative my-8 max-h-[90vh] overflow-y-auto scrollbar-none`}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-white/5 pb-4 sticky top-0 bg-[#0d0d0d] backdrop-blur-md z-10">
+              <div className="flex items-center gap-2">
+                <Edit className="w-5 h-5 text-gold-base animate-pulse" />
+                <h3 className="text-sm font-serif font-black text-white tracking-widest uppercase">
+                  EDIT PROFILE AUTHORIZATION
+                </h3>
+              </div>
+              <button
+                onClick={() => {
+                  if (typeof playInterfaceTick === 'function') playInterfaceTick();
+                  setShowEditNameModal(false);
+                }}
+                className="p-1.5 rounded-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Part 1: Name Edit (Always visible) */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!editNameValue.trim()) return;
+                if (typeof playInterfaceTick === 'function') playInterfaceTick();
+                
+                // Save name
+                const updatedUser = { ...currentUser, name: editNameValue.trim() };
+                onSwitchProfile(updatedUser);
+                
+                // Update in device list
+                try {
+                  const savedStr = localStorage.getItem('ep_device_saved_users');
+                  if (savedStr) {
+                    const saved: UserProfile[] = JSON.parse(savedStr);
+                    const idx = saved.findIndex(u => u.id === currentUser.id);
+                    if (idx >= 0) {
+                      saved[idx] = { ...saved[idx], name: editNameValue.trim() };
+                      localStorage.setItem('ep_device_saved_users', JSON.stringify(saved));
+                    }
+                  }
+                } catch (err) {
+                  console.error(err);
+                }
+                
+                setShowEditNameModal(false);
+                if (typeof playGoldenSuccessChime === 'function') playGoldenSuccessChime();
+              }}
+              className="flex flex-col gap-4 border-b border-white/5 pb-6"
+            >
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[9px] font-tech text-white/40 tracking-wider uppercase">Profile Display Name</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter Profile Name"
+                    value={editNameValue}
+                    onChange={(e) => setEditNameValue(e.target.value)}
+                    className="flex-1 bg-black/60 border border-white/10 rounded-xl px-4 py-3 text-xs text-white focus:outline-none focus:border-gold-base/40 placeholder-white/20 transition-all uppercase font-semibold"
+                  />
+                  <button
+                    type="submit"
+                    className="gold-gradient-bg text-black font-tech font-extrabold text-[9px] tracking-widest uppercase px-6 rounded-xl transition-all hover:brightness-110 active:scale-95 cursor-pointer shadow-md"
+                  >
+                    SAVE NAME
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            {/* Part 2: 3 Custom Premium Tables (Only shown if currentUser.isPremium is true) */}
+            {currentUser?.isPremium ? (
+              <div className="flex flex-col gap-8">
+                {/* Section Header */}
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-1.5">
+                    <Crown className="w-4 h-4 text-gold-base shrink-0" />
+                    <span className="text-[10px] font-tech text-gold-base font-extrabold tracking-widest uppercase">
+                      VIP PREMIUM CUSTOM CONFIGURATOR
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-white/50 leading-relaxed">
+                    As a verified VIP subscriber, you can create and manage custom overrides, streaming sources, and viewing parameters in real-time.
+                  </p>
+                </div>
+
+                {/* TABLE 1: Custom Stream Channels */}
+                <div className="flex flex-col gap-3 p-4 rounded-2xl bg-white/[0.02] border border-white/5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Tv className="w-4 h-4 text-gold-base shrink-0" />
+                      <h4 className="text-xs font-serif font-black text-white uppercase tracking-wider">
+                        1. Custom Stream Channels
+                      </h4>
+                    </div>
+                    <span className="bg-gold-base/10 text-gold-base text-[7px] font-extrabold px-1.5 py-0.5 rounded uppercase tracking-widest">
+                      ACTIVE DECODING
+                    </span>
+                  </div>
+
+                  {/* Table Render */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-[10px] border-collapse">
+                      <thead>
+                        <tr className="border-b border-white/5 text-white/40 uppercase tracking-wider font-mono">
+                          <th className="py-2 px-2 font-medium">Channel Name</th>
+                          <th className="py-2 px-2 font-medium">Source Server URL</th>
+                          <th className="py-2 px-2 font-medium">Target Bitrate</th>
+                          <th className="py-2 px-2 font-medium text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {customChannels.map((c) => (
+                          <tr key={c.id} className="border-b border-white/[0.02] hover:bg-white/[0.02] transition-all font-mono">
+                            <td className="py-2 px-2 text-white font-semibold">{c.name}</td>
+                            <td className="py-2 px-2 text-white/60 truncate max-w-[180px] text-[9px]">{c.url}</td>
+                            <td className="py-2 px-2 text-gold-base/80 font-bold">{c.bitrate}</td>
+                            <td className="py-2 px-2 text-right">
+                              <button
+                                onClick={() => handleDeleteChannel(c.id)}
+                                className="p-1 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 transition-all cursor-pointer"
+                                title="Remove Custom Channel"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Add Form */}
+                  <form onSubmit={handleAddChannel} className="grid grid-cols-1 sm:grid-cols-4 gap-2 mt-2 pt-2 border-t border-white/5">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Stream Name"
+                      value={addChanName}
+                      onChange={(e) => setAddChanName(e.target.value)}
+                      className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[9px] text-white focus:outline-none focus:border-gold-base/40 placeholder-white/20"
+                    />
+                    <input
+                      type="url"
+                      required
+                      placeholder="Source URL"
+                      value={addChanUrl}
+                      onChange={(e) => setAddChanUrl(e.target.value)}
+                      className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[9px] text-white focus:outline-none focus:border-gold-base/40 placeholder-white/20"
+                    />
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. 50 Mbps"
+                      value={addChanBitrate}
+                      onChange={(e) => setAddChanBitrate(e.target.value)}
+                      className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[9px] text-white focus:outline-none focus:border-gold-base/40 placeholder-white/20"
+                    />
+                    <button
+                      type="submit"
+                      className="gold-gradient-bg text-black font-tech font-extrabold text-[8px] py-1.5 rounded-lg flex items-center justify-center gap-1 transition-all hover:brightness-110 active:scale-95 cursor-pointer shadow"
+                    >
+                      <Plus className="w-3 h-3 text-black stroke-[3]" />
+                      ADD STREAM
+                    </button>
+                  </form>
+                </div>
+
+                {/* TABLE 2: Dynamic CDN Relays */}
+                <div className="flex flex-col gap-3 p-4 rounded-2xl bg-white/[0.02] border border-white/5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Server className="w-4 h-4 text-gold-base shrink-0" />
+                      <h4 className="text-xs font-serif font-black text-white uppercase tracking-wider">
+                        2. Dynamic CDN Relays
+                      </h4>
+                    </div>
+                    <span className="bg-amber-500/10 text-amber-500 text-[7px] font-extrabold px-1.5 py-0.5 rounded uppercase tracking-widest animate-pulse">
+                      LATENCY PROXIES
+                    </span>
+                  </div>
+
+                  {/* Table Render */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-[10px] border-collapse">
+                      <thead>
+                        <tr className="border-b border-white/5 text-white/40 uppercase tracking-wider font-mono">
+                          <th className="py-2 px-2 font-medium">Relay Node</th>
+                          <th className="py-2 px-2 font-medium">IP Address</th>
+                          <th className="py-2 px-2 font-medium">Terminal Latency</th>
+                          <th className="py-2 px-2 font-medium text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cdnRelays.map((r) => (
+                          <tr key={r.id} className="border-b border-white/[0.02] hover:bg-white/[0.02] transition-all font-mono">
+                            <td className="py-2 px-2 text-white font-semibold">{r.name}</td>
+                            <td className="py-2 px-2 text-white/60 text-[9px]">{r.ip}</td>
+                            <td className="py-2 px-2 text-emerald-400 font-bold">{r.latency}</td>
+                            <td className="py-2 px-2 text-right">
+                              <button
+                                onClick={() => handleDeleteCdnRelay(r.id)}
+                                className="p-1 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 transition-all cursor-pointer"
+                                title="Remove CDN Relay"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Add Form */}
+                  <form onSubmit={handleAddCdnRelay} className="grid grid-cols-1 sm:grid-cols-4 gap-2 mt-2 pt-2 border-t border-white/5">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Node Name"
+                      value={addCdnName}
+                      onChange={(e) => setAddCdnName(e.target.value)}
+                      className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[9px] text-white focus:outline-none focus:border-gold-base/40 placeholder-white/20"
+                    />
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. 10.24.5.12"
+                      value={addCdnIp}
+                      onChange={(e) => setAddCdnIp(e.target.value)}
+                      className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[9px] text-white focus:outline-none focus:border-gold-base/40 placeholder-white/20"
+                    />
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. 1.2 ms"
+                      value={addCdnLatency}
+                      onChange={(e) => setAddCdnLatency(e.target.value)}
+                      className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[9px] text-white focus:outline-none focus:border-gold-base/40 placeholder-white/20"
+                    />
+                    <button
+                      type="submit"
+                      className="gold-gradient-bg text-black font-tech font-extrabold text-[8px] py-1.5 rounded-lg flex items-center justify-center gap-1 transition-all hover:brightness-110 active:scale-95 cursor-pointer shadow"
+                    >
+                      <Plus className="w-3 h-3 text-black stroke-[3]" />
+                      ADD RELAY
+                    </button>
+                  </form>
+                </div>
+
+                {/* TABLE 3: Advanced Display Filters */}
+                <div className="flex flex-col gap-3 p-4 rounded-2xl bg-white/[0.02] border border-white/5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Monitor className="w-4 h-4 text-gold-base shrink-0" />
+                      <h4 className="text-xs font-serif font-black text-white uppercase tracking-wider">
+                        3. Advanced Display Filters
+                      </h4>
+                    </div>
+                    <span className="bg-emerald-500/10 text-emerald-400 text-[7px] font-extrabold px-1.5 py-0.5 rounded uppercase tracking-widest">
+                      LUMA COLORMETRICS
+                    </span>
+                  </div>
+
+                  {/* Table Render */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-[10px] border-collapse">
+                      <thead>
+                        <tr className="border-b border-white/5 text-white/40 uppercase tracking-wider font-mono">
+                          <th className="py-2 px-2 font-medium">Filter Profile</th>
+                          <th className="py-2 px-2 font-medium">Aspect Ratio</th>
+                          <th className="py-2 px-2 font-medium">Luma Overdrive</th>
+                          <th className="py-2 px-2 font-medium text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {displayFilters.map((f) => (
+                          <tr key={f.id} className="border-b border-white/[0.02] hover:bg-white/[0.02] transition-all font-mono">
+                            <td className="py-2 px-2 text-white font-semibold">{f.name}</td>
+                            <td className="py-2 px-2 text-amber-400 text-[9px]">{f.ratio}</td>
+                            <td className="py-2 px-2 text-gold-base/80 font-bold">{f.luma}</td>
+                            <td className="py-2 px-2 text-right">
+                              <button
+                                onClick={() => handleDeleteDisplayFilter(f.id)}
+                                className="p-1 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 transition-all cursor-pointer"
+                                title="Remove Filter"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Add Form */}
+                  <form onSubmit={handleAddDisplayFilter} className="grid grid-cols-1 sm:grid-cols-4 gap-2 mt-2 pt-2 border-t border-white/5">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Filter Profile"
+                      value={addFiltName}
+                      onChange={(e) => setAddFiltName(e.target.value)}
+                      className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[9px] text-white focus:outline-none focus:border-gold-base/40 placeholder-white/20"
+                    />
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. 16:9 Cinema"
+                      value={addFiltRatio}
+                      onChange={(e) => setAddFiltRatio(e.target.value)}
+                      className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[9px] text-white focus:outline-none focus:border-gold-base/40 placeholder-white/20"
+                    />
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. +30% Gain"
+                      value={addFiltLuma}
+                      onChange={(e) => setAddFiltLuma(e.target.value)}
+                      className="bg-black/40 border border-white/10 rounded-lg px-2.5 py-1.5 text-[9px] text-white focus:outline-none focus:border-gold-base/40 placeholder-white/20"
+                    />
+                    <button
+                      type="submit"
+                      className="gold-gradient-bg text-black font-tech font-extrabold text-[8px] py-1.5 rounded-lg flex items-center justify-center gap-1 transition-all hover:brightness-110 active:scale-95 cursor-pointer shadow"
+                    >
+                      <Plus className="w-3 h-3 text-black stroke-[3]" />
+                      ADD FILTER
+                    </button>
+                  </form>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-6 text-center border border-dashed border-white/10 rounded-2xl bg-white/[0.01] gap-2">
+                <Crown className="w-8 h-8 text-white/20" />
+                <div className="flex flex-col gap-1 max-w-xs">
+                  <h4 className="text-xs font-serif font-bold text-white/70 uppercase tracking-widest">VIP CONFIGURATOR LOCKED</h4>
+                  <p className="text-[10px] text-white/40 leading-relaxed">
+                    Custom config tables are exclusive to VIP subscribers. Activate Premium to manage custom streams, CDN nodes, and colorimetry parameters.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Footer info text */}
+            <div className="border-t border-white/5 pt-4 text-[8px] font-tech text-white/30 text-center tracking-wider uppercase sticky bottom-0 bg-[#0d0d0d] py-2 z-10">
+              CONFIGURATIONS PERSIST SECURELY ON THIS LOCAL WORKSPACE TERMINAL
             </div>
           </motion.div>
         </div>

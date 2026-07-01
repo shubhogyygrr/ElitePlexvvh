@@ -24,7 +24,8 @@ import {
   Search,
   Sliders,
   Sparkles,
-  Info
+  Info,
+  Mic
 } from 'lucide-react';
 import { PermissionItem } from '../lib/permissions';
 
@@ -46,6 +47,7 @@ const getPermissionIcon = (name: string) => {
     case 'CreditCard': return CreditCard;
     case 'Fingerprint': return Fingerprint;
     case 'MapPin': return MapPin;
+    case 'Mic': return Mic;
     default: return Shield;
   }
 };
@@ -124,6 +126,19 @@ export default function PermissionsModal({
           targetStatus = 'denied';
         }
       }
+    } else if (id === 'core-microphone') {
+      targetStatus = 'granted';
+      localStorage.setItem('ep_microphone_permission_granted', 'true');
+      
+      if ('mediaDevices' in navigator) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          // Stop all audio tracks immediately to release hardware
+          stream.getTracks().forEach(track => track.stop());
+        } catch (e) {
+          console.error("Error requesting microphone (gracefully caught for compatibility):", e);
+        }
+      }
     }
 
     setLocalPermissions(prev => prev.map(p => {
@@ -147,6 +162,15 @@ export default function PermissionsModal({
 
   // Handle saving
   const handleSaveAndSubmit = () => {
+    // Check if core-microphone is granted in localPermissions
+    const micPerm = localPermissions.find(p => p.id === 'core-microphone');
+    if (micPerm) {
+      if (micPerm.status === 'granted') {
+        localStorage.setItem('ep_microphone_permission_granted', 'true');
+      } else {
+        localStorage.setItem('ep_microphone_permission_granted', 'false');
+      }
+    }
     onSave(localPermissions);
     if (onClose) onClose();
   };

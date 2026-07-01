@@ -55,6 +55,15 @@ export const ALL_PERMISSIONS: PermissionItem[] = [
     status: 'pending',
     requiredCount: 5
   },
+  {
+    id: 'core-microphone',
+    name: 'Voice Assistant Microphone',
+    description: 'Enables speech-to-text live parser for voice searches and premium AI assistant controls.',
+    category: 'Core App',
+    iconName: 'Mic',
+    status: 'pending',
+    requiredCount: 5
+  },
 
   // 2. Movie Details Permissions (4 items)
   {

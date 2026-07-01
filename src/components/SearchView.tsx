@@ -63,6 +63,7 @@ export default function SearchView({
   const [isListening, setIsListening] = useState(false);
   const [voiceText, setVoiceText] = useState('');
   const [voiceError, setVoiceError] = useState('');
+  const [showMicPermissionPrompt, setShowMicPermissionPrompt] = useState(false);
   const recognitionRef = useRef<any>(null);
 
   const [activeSection, setActiveSection] = useState<'suggestions' | 'results' | null>(null);
@@ -263,8 +264,39 @@ export default function SearchView({
     }
   };
 
+  const handleGrantMicPermission = async () => {
+    if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    
+    // Persist permission as granted in localStorage immediately so they aren't prompted repeatedly
+    localStorage.setItem('ep_microphone_permission_granted', 'true');
+    setShowMicPermissionPrompt(false);
+    
+    try {
+      if ('mediaDevices' in navigator) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop());
+      }
+      setTimeout(() => {
+        startVoiceRecognition();
+      }, 300);
+    } catch (err) {
+      console.warn("Microphone access request failed (using simulator fallback):", err);
+      setTimeout(() => {
+        startVoiceRecognition();
+      }, 300);
+    }
+  };
+
   const startVoiceRecognition = () => {
     if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    
+    // Check if permission was already saved and granted
+    const isSaved = localStorage.getItem('ep_microphone_permission_granted') === 'true';
+    if (!isSaved) {
+      setShowMicPermissionPrompt(true);
+      return;
+    }
+
     setVoiceError('');
     setVoiceText('');
 
@@ -711,6 +743,56 @@ export default function SearchView({
           )}
         </AnimatePresence>
       </div>
+
+      {/* Custom Mic Permission Modal Prompt */}
+      <AnimatePresence>
+        {showMicPermissionPrompt && (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 backdrop-blur-md p-6 text-center">
+            <motion.div
+              initial={{ scale: 0.9, y: 20, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.9, y: 20, opacity: 0 }}
+              className={`max-w-xs w-full p-6 rounded-3xl border ${
+                isDarkMode 
+                  ? 'bg-stone-900/90 border-white/10 text-white' 
+                  : 'bg-white border-black/10 text-stone-900'
+              } shadow-2xl flex flex-col items-center gap-4`}
+            >
+              <div className="w-14 h-14 rounded-2xl bg-gold-base/10 border border-gold-base/30 flex items-center justify-center text-gold-base animate-pulse">
+                <Mic className="w-7 h-7" />
+              </div>
+              <div>
+                <h4 className="text-sm font-tech font-extrabold tracking-wider text-gold-base uppercase">
+                  MICROPHONE ACCESS
+                </h4>
+                <p className="text-[11px] opacity-70 leading-relaxed mt-2">
+                  Elite Plex requires microphone permission to enable speech-to-text voice search.
+                </p>
+                <p className="text-[9px] text-amber-500/80 font-mono mt-1">
+                  We will save this so you only authorize once.
+                </p>
+              </div>
+              <div className="flex flex-col gap-2 w-full mt-2">
+                <button
+                  onClick={handleGrantMicPermission}
+                  className="w-full py-2.5 gold-gradient-bg text-black font-tech text-xs font-black tracking-wider uppercase rounded-xl transition-all shadow-lg active:scale-95 cursor-pointer font-bold"
+                >
+                  ALLOW MICROPHONE
+                </button>
+                <button
+                  onClick={() => {
+                    if (typeof playInterfaceTick === 'function') playInterfaceTick();
+                    setShowMicPermissionPrompt(false);
+                  }}
+                  className="w-full py-2 bg-white/5 hover:bg-white/10 text-white/60 text-[10px] font-mono tracking-wider uppercase rounded-xl transition-all"
+                >
+                  CANCEL
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

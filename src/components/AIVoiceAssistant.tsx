@@ -104,6 +104,7 @@ export default function AIVoiceAssistant({
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speechEnabled, setSpeechEnabled] = useState(true);
   const [unreads, setUnreads] = useState(0);
+  const [showMicPermissionPrompt, setShowMicPermissionPrompt] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -307,8 +308,57 @@ export default function AIVoiceAssistant({
     }
   }, [isOpen]);
 
+  const handleGrantMicPermission = async () => {
+    if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    
+    // Save microphone permission as granted immediately so they are never prompted again
+    localStorage.setItem('ep_microphone_permission_granted', 'true');
+    setShowMicPermissionPrompt(false);
+    
+    try {
+      if ('mediaDevices' in navigator) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(track => track.stop());
+      }
+      setTimeout(() => {
+        if (recognitionRef.current) {
+          if (synthRef.current) {
+            synthRef.current.cancel();
+          }
+          try {
+            recognitionRef.current.start();
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      }, 300);
+    } catch (err) {
+      console.warn("Microphone access request failed (using simulator/graceful fallback):", err);
+      setTimeout(() => {
+        if (recognitionRef.current) {
+          if (synthRef.current) {
+            synthRef.current.cancel();
+          }
+          try {
+            recognitionRef.current.start();
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      }, 300);
+    }
+  };
+
   const toggleListen = () => {
     if (typeof playInterfaceTick === 'function') playInterfaceTick();
+    
+    // Check if permission was already saved and granted
+    const isSaved = localStorage.getItem('ep_microphone_permission_granted') === 'true';
+    if (!isSaved) {
+      setShowMicPermissionPrompt(true);
+      return;
+    }
+
     if (!recognitionRef.current) {
       alert("Speech Recognition is not supported or permission was denied in this browser tab.");
       return;
@@ -703,6 +753,61 @@ export default function AIVoiceAssistant({
                   </button>
                 </div>
               </div>
+
+              {/* Custom Mic Permission Modal Prompt */}
+              <AnimatePresence>
+                {showMicPermissionPrompt && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-6 text-center"
+                  >
+                    <motion.div
+                      initial={{ scale: 0.9, y: 20 }}
+                      animate={{ scale: 1, y: 0 }}
+                      exit={{ scale: 0.9, y: 20 }}
+                      className={`max-w-xs w-full p-6 rounded-3xl border ${
+                        isDarkMode 
+                          ? 'bg-stone-900/90 border-white/10 text-white' 
+                          : 'bg-white border-black/10 text-stone-900'
+                      } shadow-2xl flex flex-col items-center gap-4`}
+                    >
+                      <div className="w-14 h-14 rounded-2xl bg-gold-base/10 border border-gold-base/30 flex items-center justify-center text-gold-base animate-pulse">
+                        <Mic className="w-7 h-7" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-tech font-extrabold tracking-wider text-gold-base uppercase">
+                          MICROPHONE ACCESS
+                        </h4>
+                        <p className="text-[11px] opacity-70 leading-relaxed mt-2">
+                          Elite Plex requires microphone permission to enable the AI Voice Movie Companion.
+                        </p>
+                        <p className="text-[9px] text-amber-500/80 font-mono mt-1">
+                          We will save this so you only authorize once.
+                        </p>
+                      </div>
+                      <div className="flex flex-col gap-2 w-full mt-2">
+                        <button
+                          onClick={handleGrantMicPermission}
+                          className="w-full py-2.5 gold-gradient-bg text-black font-tech text-xs font-black tracking-wider uppercase rounded-xl transition-all shadow-lg active:scale-95 cursor-pointer font-bold"
+                        >
+                          ALLOW MICROPHONE
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (typeof playInterfaceTick === 'function') playInterfaceTick();
+                            setShowMicPermissionPrompt(false);
+                          }}
+                          className="w-full py-2 bg-white/5 hover:bg-white/10 text-white/60 text-[10px] font-mono tracking-wider uppercase rounded-xl transition-all"
+                        >
+                          CANCEL
+                        </button>
+                      </div>
+                    </motion.div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           </div>
         )}

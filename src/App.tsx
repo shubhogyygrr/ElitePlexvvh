@@ -27,7 +27,7 @@ import {
   trackWatchlistInFirestore,
   getLiveTrafficFromFirestore,
 } from './lib/firestoreService';
-import { Bell, Sparkles, X, ChevronRight, Play, Star, Heart, Plus, Edit, Trash2, Crown, Lock, Film, ArrowLeft, WifiOff, Download } from 'lucide-react';
+import { Bell, Sparkles, X, ChevronRight, Play, Star, Heart, Plus, Edit, Trash2, Crown, Lock, Film, ArrowLeft, WifiOff, Download, Check } from 'lucide-react';
 import { playInterfaceTick, playGoldenSuccessChime } from './lib/soundEffects';
 import { translateText } from './lib/translator';
 import { getLocalFile, formatBytes, triggerRealFileDownload, saveLocalFile, getPlaybackProgress } from './lib/indexedDBStorage';
@@ -656,6 +656,15 @@ export default function App() {
   // Push Notifications Queue
   const [activePushNotification, setActivePushNotification] = useState<AppNotification | null>(null);
 
+  // Custom UI Toasts for Add and Delete operations
+  interface CustomToast {
+    id: string;
+    type: 'add' | 'delete' | 'info' | 'success';
+    title: string;
+    message: string;
+  }
+  const [toasts, setToasts] = useState<CustomToast[]>([]);
+
   // Client Notification Board
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [appNotifications, setAppNotifications] = useState<AppNotification[]>([]);
@@ -733,8 +742,31 @@ export default function App() {
         });
       }
     };
+
+    const handleCustomToast = (e: Event) => {
+      const customEvent = e as CustomEvent<{ type: 'add' | 'delete' | 'info' | 'success'; title: string; message: string }>;
+      if (customEvent.detail) {
+        const id = `toast_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+        const newToast: CustomToast = {
+          id,
+          type: customEvent.detail.type || 'info',
+          title: customEvent.detail.title || 'Notification',
+          message: customEvent.detail.message || '',
+        };
+        setToasts((prev) => [...prev, newToast]);
+        // Auto-remove after 4 seconds
+        setTimeout(() => {
+          setToasts((prev) => prev.filter((t) => t.id !== id));
+        }, 4000);
+      }
+    };
+
     window.addEventListener('elite-plex-alert', handleCustomAlert);
-    return () => window.removeEventListener('elite-plex-alert', handleCustomAlert);
+    window.addEventListener('elite-plex-toast', handleCustomToast);
+    return () => {
+      window.removeEventListener('elite-plex-alert', handleCustomAlert);
+      window.removeEventListener('elite-plex-toast', handleCustomToast);
+    };
   }, []);
 
   // Sync state with LocalStorage
@@ -978,8 +1010,22 @@ export default function App() {
     const isNowAdded = !watchlistIds.includes(movie.id);
     if (watchlistIds.includes(movie.id)) {
       setWatchlistIds(watchlistIds.filter((id) => id !== movie.id));
+      window.dispatchEvent(new CustomEvent('elite-plex-toast', {
+        detail: {
+          type: 'delete',
+          title: 'Removed from Favorites',
+          message: `"${movie.title}" has been removed from your watchlist.`
+        }
+      }));
     } else {
       setWatchlistIds([...watchlistIds, movie.id]);
+      window.dispatchEvent(new CustomEvent('elite-plex-toast', {
+        detail: {
+          type: 'add',
+          title: 'Added to Favorites',
+          message: `"${movie.title}" was added to your watchlist!`
+        }
+      }));
     }
     if (currentUser?.id) {
       trackWatchlistInFirestore(currentUser.id, movie, isNowAdded).then(() => {
@@ -1021,6 +1067,21 @@ export default function App() {
     }
 
     if (movie.type === 'series' && episode) {
+      // Record last watched episode for Watch Next queue
+      try {
+        const lastWatchedStr = localStorage.getItem('ep_series_last_watched') || '{}';
+        const lastWatchedMap = JSON.parse(lastWatchedStr);
+        lastWatchedMap[movie.id] = {
+          episodeId: episode.id,
+          updatedAt: Date.now()
+        };
+        localStorage.setItem('ep_series_last_watched', JSON.stringify(lastWatchedMap));
+        // Dispatch custom event to let components (like HomeView) know to update their Watch Next lists
+        window.dispatchEvent(new Event('ep-series-last-watched-updated'));
+      } catch (e) {
+        console.error("Failed to save last watched series episode:", e);
+      }
+
       setActivePlayer({
         movie,
         episode,
@@ -1389,6 +1450,13 @@ export default function App() {
         };
 
         setDownloads((prev) => [newItem, ...prev]);
+        window.dispatchEvent(new CustomEvent('elite-plex-toast', {
+          detail: {
+            type: 'add',
+            title: isQueued ? 'Download Queued' : 'Download Started',
+            message: `"${title}" has been added to your local cache list.`
+          }
+        }));
 
         if (!isQueued) {
           runDownloadStream(fileId, title, movie, targetVideoUrl, episode);
@@ -1567,6 +1635,63 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Custom Toast Notifications Stack */}
+      <div className="fixed bottom-24 right-6 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full">
+        <AnimatePresence>
+          {toasts.map((toast) => (
+            <motion.div
+              key={toast.id}
+              initial={{ opacity: 0, x: 50, scale: 0.9 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 50, scale: 0.9 }}
+              className={`p-3.5 rounded-2xl border flex items-center gap-3 shadow-xl backdrop-blur-md pointer-events-auto w-full transition-colors ${
+                isDarkMode 
+                  ? toast.type === 'add'
+                    ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-100'
+                    : toast.type === 'delete'
+                      ? 'bg-red-950/40 border-red-500/30 text-red-100'
+                      : 'bg-neutral-900/90 border-white/10 text-white'
+                  : toast.type === 'add'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : toast.type === 'delete'
+                      ? 'bg-red-50 border-red-200 text-red-900'
+                      : 'bg-white border-neutral-200 text-neutral-900'
+              }`}
+            >
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                toast.type === 'add'
+                  ? 'bg-emerald-500/20 text-emerald-400'
+                  : toast.type === 'delete'
+                    ? 'bg-red-500/20 text-red-400'
+                    : 'bg-gold-base/20 text-gold-base'
+              }`}>
+                {toast.type === 'add' ? (
+                  <Plus className="w-4 h-4 stroke-[3]" />
+                ) : toast.type === 'delete' ? (
+                  <Trash2 className="w-4 h-4" />
+                ) : (
+                  <Check className="w-4 h-4 stroke-[3]" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h5 className="text-[11px] font-bold tracking-wide uppercase leading-none mb-1">
+                  {toast.title}
+                </h5>
+                <p className="text-[10px] opacity-80 leading-relaxed font-mono">
+                  {toast.message}
+                </p>
+              </div>
+              <button 
+                onClick={() => setToasts((prev) => prev.filter((t) => t.id !== toast.id))}
+                className="opacity-40 hover:opacity-100 active:scale-95 transition-all p-1"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+
       {/* Cinematic "Details Loaded" Overlay */}
       <AnimatePresence>
         {detailsLoadedMovie && (
@@ -1724,6 +1849,7 @@ export default function App() {
                   setStartVoiceSearchImmediately(true);
                   setShowSearchView(true);
                 }}
+                onPlayMovie={handlePlayMovie}
               />
             )}
 
@@ -2199,6 +2325,7 @@ export default function App() {
             startTime={activePlayer.startTime}
             isMini={isMiniPlayer}
             onMinimizeToggle={() => setIsMiniPlayer(!isMiniPlayer)}
+            currentUser={currentUser}
           />
         )}
 
@@ -2474,7 +2601,17 @@ export default function App() {
                 startTime: savedProgress
               });
             }}
-            onRemoveDownload={(id) => setDownloads(downloads.filter((d) => d.id !== id))}
+            onRemoveDownload={(id) => {
+              const item = downloads.find(d => d.id === id);
+              setDownloads(downloads.filter((d) => d.id !== id));
+              window.dispatchEvent(new CustomEvent('elite-plex-toast', {
+                detail: {
+                  type: 'delete',
+                  title: 'Cache Deleted',
+                  message: item ? `"${item.title}" cache was deleted.` : 'Offline cache has been deleted.'
+                }
+              }));
+            }}
             onClose={() => setShowDownloadsView(false)}
             maxConcurrent={maxConcurrent}
             setMaxConcurrent={setMaxConcurrent}

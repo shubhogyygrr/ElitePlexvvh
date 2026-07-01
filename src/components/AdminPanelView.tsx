@@ -1107,6 +1107,13 @@ export default function AdminPanelView({
     setIsSelectionMode(false);
     setIsServersLoading(false);
     alert(`Successfully deleted ${count} items from Firestore!`);
+    window.dispatchEvent(new CustomEvent('elite-plex-toast', {
+      detail: {
+        type: 'delete',
+        title: 'Catalog Items Purged',
+        message: `Successfully deleted ${count} items from Firestore database.`
+      }
+    }));
   };
 
   // Server Form States
@@ -1317,6 +1324,13 @@ export default function AdminPanelView({
     setIsPremium(false);
     setIsTrending(false);
     alert(`Successfully registered "${title}" as dynamic database item!`);
+    window.dispatchEvent(new CustomEvent('elite-plex-toast', {
+      detail: {
+        type: 'add',
+        title: 'Catalog Item Added',
+        message: `"${title}" has been successfully registered to the catalog database.`
+      }
+    }));
   };
 
   const handleSendNotif = async (e: React.FormEvent) => {
