@@ -1,0 +1,11 @@
+{
+  "name": "Elite Plex",
+  "description": "ELITE PLEX OTT MOVIE \u0026 SERIES AND TV SHOWS 5000+ SHOW NEW OLD IS GOL",
+  "requestFramePermissions": [
+    "geolocation",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
